@@ -62,20 +62,15 @@ except:
 
 try:
     anno_gtf = config['anno_gtf'][config['assembly']]
-    anno_repeats_gtf = config['anno_repeats_gtf'][config['assembly']]
-    mask = config['mask'][config['assembly']]
-    exon_intron_gtf = config['exon_intron_gtf'][config['assembly']]
 except:
     print('Annotation or mask path not specified in config.yaml')
     sys.exit() #no default, exit
 
 try:
-    if RNA_aligner == 'hisat2':
-        hisat2_index = config['hisat2_index'][config['assembly']]
-        hisat2_ss = config['hisat2_splice_sites'][config['assembly']]
-    print('Using', RNA_aligner, 'for RNA alignment')
+    hisat2_index = config['hisat2_index'][config['assembly']]
+    hisat2_ss = config['hisat2_splice_sites'][config['assembly']]
 except:
-    print('RNA aligner not specified in config.yaml')
+    print('Hisat2 index and splice sites not specified in config.yaml')
     sys.exit()
 
 
@@ -284,7 +279,7 @@ rule annotate_rna:
         '''
         featureCounts -T {threads} -t exon \
         -R BAM -M -s 1 \
-        -g gene_name -a {gtf} -o {output.counts} \
+        -g gene_name -a {anno_gtf} -o {output.counts} \
         {input}
         '''
 

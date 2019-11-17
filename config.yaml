@@ -10,8 +10,7 @@ output_dir: ""
 assembly: "mm10"
 #Number of barcodes used
 num_tags: "5"
-#Aligned for RNA "hisat2"
-rna_aligner: "hisat2"
+
 #Hisat2 indexes location with prefix
 hisat2_index:
     mm10: "/groups/guttman/Peter/genomes/GRCm38.p6/GRCm38.p6"
@@ -19,3 +18,13 @@ hisat2_index:
 hisat2_splice_sites:
     mm10: "/groups/guttman/Peter/genomes/GRCm38.p6/Mus_musculus.GRCm38.95.ss"
     hg38: "/groups/guttman/Peter/genomes/GRCh38/Homo_sapiens.GRCh38.97.ss"
+#Annotation GTF file used for featureCounts
+anno_gtf:
+    mm10: "/groups/guttman/Peter/genomes/GRCm38.p6/GRCm38.p6.annotation.gtf.gz"
+    hg19: "/groups/guttman/genomes/homo_sapiens/hg19/STAR/hg19/gencode.v19.annotation.gtf"
+    hg38: "/groups/guttman/Peter/genomes/GRCh38/Homo_sapiens.GRCh38.97.gtf.gz"
+#Annotation GTF file used for featureCounts
+anno_gtf:
+    mm10: "/groups/guttman/Peter/genomes/GRCm38.p6/GRCm38.p6.annotation.gtf.gz"
+    hg19: "/groups/guttman/genomes/homo_sapiens/hg19/STAR/hg19/gencode.v19.annotation.gtf"
+    hg38: "/groups/guttman/Peter/genomes/GRCh38/Homo_sapiens.GRCh38.97.gtf.gz"
