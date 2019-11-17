@@ -12,7 +12,7 @@ barcode_id_jar = "sprite-pipeline/java/BarcodeIdentification_v1.2.0.jar"
 lig_eff = "sprite-pipeline/python/get_ligation_efficiency.py"
 add_chr = "sprite-pipeline/python/ensembl2ucsc.py"
 get_clusters = "sprite-pipeline/python/get_clusters.py"
-
+split_fq = "scripts/python/get_full_barcodes.py"
 
 #Load config.yaml file
 
@@ -109,6 +109,8 @@ MASKED = expand("workup/alignments/{sample}.DNA.chr.masked.bam", sample=ALL_SAMP
 MULTI_QC = ["workup/qc/multiqc_report.html"]
 BARCODEID = expand("workup/fastqs/{sample}_{read}.barcoded.fastq.gz", sample = ALL_SAMPLES, 
                    read = ["R1", "R2"])
+BARCODE_FULL = expand(out_dir + "workup/fastqs/{sample}_R1.barcoded_full.fastq.gz", sample=ALL_SAMPLES)
+
 CLUSTERS = expand("workup/clusters/{sample}.clusters", sample=ALL_SAMPLES)
 #Hisat2 alignment
 Ht2_RNA_ALIGN = expand("workup/alignments/{sample}.RNA.hisat2.mapq20.bam", 
@@ -118,7 +120,7 @@ Ht2_ANNO_RNA = expand("workup/alignments/{sample}.RNA.hisat2.mapq20.bam.featureC
 
 
 rule all:
-    input: ALL_FASTQ + TRIM + TRIM_LOG + BARCODEID + LE_LOG_ALL + 
+    input: ALL_FASTQ + TRIM + TRIM_LOG + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
            Ht2_RNA_ALIGN + Ht2_ANNO_RNA + CLUSTERS + MULTI_QC
 
  
@@ -164,7 +166,7 @@ rule barcode_id:
         r2 = "workup/trimmed/{sample}_R2_val_2.fq.gz"
     output:
     #if statements have to be inline (each input is like a function)
-        r1_barcoded = "workup/fastqs/{sample}_R1.barcoded.fastq.gz"
+        r1_barcoded = "workup/fastqs/{sample}_R1.barcoded.fastq.gz",
         r2_barcoded = "workup/fastqs/{sample}_R2.barcoded.fastq.gz"
     log:
         "workup/logs/{sample}.bID.log"
@@ -193,9 +195,21 @@ rule cat_ligation_efficiency:
         "workup/ligation_efficiency.txt"
     shell:
         "tail -n +1 {input} > {output}"
-if sprite_type=="RNA-DNA" else
-        expand("workup/clusters/{sample}.clusters", sample=ALL_SAMPLES)
+      
 
+rule full_barcode:
+    '''
+    remove incomplete barcodes
+    '''
+    input:
+        out_dir + "workup/fastqs/{sample}_R1.barcoded.fastq.gz"
+    output:
+        out_dir + "workup/fastqs/{sample}_R1.barcoded_full.fastq.gz",
+        out_dir + "workup/fastqs/{sample}_R1.barcoded_short.fastq.gz"
+    log:
+        out_dir + "workup/logs/{sample}_DPM.log"
+    shell:
+        "python {split_fq} --r1 {input} &> {log}"
 
 
 ############################################################################################
@@ -214,7 +228,7 @@ rule hisat2_align:
     #-U FILE Write alignments that are not selected by the various filter options to FILE
     '''
     input:
-        fq="workup/fastqs/{sample}_R1.barcoded_rpm.fastq.gz"
+        fq="workup/fastqs/{sample}_R1.barcoded_full.fastq.gz"
     output:
         all_reads=temp("workup/alignments/{sample}.RNA.hisat2.bam"),
         mapped="workup/alignments/{sample}.RNA.hisat2.mapq20.bam"
