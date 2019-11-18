@@ -9,8 +9,7 @@ output_dir: ""
 #Currently "mm10" and "hg38" available
 assembly: "mm10"
 #Number of barcodes used
-num_tags: "5"
-
+num_tags: "4"
 #Hisat2 indexes location with prefix
 hisat2_index:
     mm10: "/groups/guttman/Peter/genomes/GRCm38.p6/GRCm38.p6"

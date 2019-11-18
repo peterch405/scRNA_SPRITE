@@ -8,10 +8,10 @@ import os
 import sys
 
 #Location of scripts
-barcode_id_jar = "sprite-pipeline/java/BarcodeIdentification_v1.2.0.jar"
-lig_eff = "sprite-pipeline/python/get_ligation_efficiency.py"
-add_chr = "sprite-pipeline/python/ensembl2ucsc.py"
-get_clusters = "sprite-pipeline/python/get_clusters.py"
+barcode_id_jar = "scripts/java/BarcodeIdentification_v1.2.0.jar"
+lig_eff = "scripts/python/get_ligation_efficiency.py"
+add_chr = "scripts/python/ensembl2ucsc.py"
+get_clusters = "scripts/python/get_clusters.py"
 split_fq = "scripts/python/get_full_barcodes.py"
 
 #Load config.yaml file
@@ -112,11 +112,11 @@ Ht2_RNA_ALIGN = expand("workup/alignments/{sample}.RNA.hisat2.mapq20.bam",
                         sample=ALL_SAMPLES)
 Ht2_ANNO_RNA = expand("workup/alignments/{sample}.RNA.hisat2.mapq20.bam.featureCounts.bam",
                   sample=ALL_SAMPLES)
-
+CLUSTERS_PLOT = [out_dir + "workup/clusters/cluster_sizes.pdf", out_dir + "workup/clusters/cluster_sizes.png"]
 
 rule all:
     input: ALL_FASTQ + TRIM + TRIM_LOG + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
-           Ht2_RNA_ALIGN + Ht2_ANNO_RNA + CLUSTERS + MULTI_QC
+           Ht2_RNA_ALIGN + Ht2_ANNO_RNA + CLUSTERS + MULTI_QC + CLUSTERS_PLOT
 
  
 
@@ -329,4 +329,19 @@ rule multiqc:
         "multiqc workup -o workup/qc"
 
 
-
+rule plot_cluster_size:
+    input:
+        expand(out_dir + "workup/clusters/{sample}.clusters", sample=ALL_SAMPLES)
+    output:
+        out_dir + "workup/clusters/cluster_sizes.pdf",
+        out_dir + "workup/clusters/cluster_sizes.png"
+    log:
+        out_dir + "workup/logs/cluster_sizes.log"
+    conda:
+        "envs/r.yaml"
+    shell:
+        '''
+        Rscript scripts/r/get_cluster_size_distribution.r \
+            {out_dir}workup/clusters/ \
+            DNA.clusters
+        '''
