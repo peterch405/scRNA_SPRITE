@@ -225,7 +225,6 @@ rule hisat2_align:
     input:
         fq="workup/fastqs/{sample}_R1.barcoded_full.fastq.gz"
     output:
-        all_reads=temp("workup/alignments/{sample}.RNA.hisat2.bam"),
         mapped="workup/alignments/{sample}.RNA.hisat2.mapq20.bam"
     threads: 10
     conda:
@@ -241,7 +240,7 @@ rule hisat2_align:
         --known-splicesite-infile {hisat2_ss} \
         -x {hisat2_index} \
         -U {input.fq} | \
-        samtools view -bq 20 -F 4 -F 256 - > {output.all_reads}) &> {log}
+        samtools view -bq 20 -F 4 -F 256 - > {output.mapped}) &> {log}
         '''
 
 
