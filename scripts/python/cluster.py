@@ -133,6 +133,12 @@ def get_clusters(bamfile, num_tags):
     for bam in bamfile:
         #get sample name from bamfile
         file_name = os.path.basename(bam)
+        #get genome build
+        if 'hg38' in file_name:
+            assembly = 'hg38'
+        elif 'mm10' in file_name:
+            assembly = 'mm10'
+
         sample_name = file_name.split('.')[0]
         try:
             with pysam.AlignmentFile(bam, "rb") as f:
@@ -141,7 +147,19 @@ def get_clusters(bamfile, num_tags):
                     match = pattern.search(name)
                     barcode = list(match.groups())
                     strand = '+' if not read.is_reverse else '-'
-                    position = Position('DNA', strand, read.reference_name,
+                   
+
+                    if read.has_tag('XT'):
+                        gene_anno = read.get_tag('XT')
+                    elif read.has_tag('XS'):
+                        gene_anno = read.get_tag('XS')
+                    else:
+                        gene_anno = ''
+                    
+                    
+                    anno = ';'.join(filter(None, [assembly, gene_anno]))
+
+                    position = Position('DNA', anno, read.reference_name,
                                         read.reference_start, read.reference_end)
                     barcode.append(sample_name)
                     barcode_str = ".".join(barcode)

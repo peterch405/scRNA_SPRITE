@@ -14,7 +14,7 @@ lig_eff = "scripts/python/get_ligation_efficiency.py"
 add_chr = "scripts/python/ensembl2ucsc.py"
 get_clusters = "scripts/python/get_clusters.py"
 split_fq = "scripts/python/get_full_barcodes.py"
-
+remove_multi = "scripts/python/remove_multialigners.py"
 #Load config.yaml file
 
 try:
@@ -26,8 +26,8 @@ configfile: config_path
 
 
 #Copy config file into logs
-# v = datetime.datetime.now()
-# run_date = v.strftime('%Y.%m.%d.')
+v = datetime.datetime.now()
+run_date = v.strftime('%Y.%m.%d.')
 
 
 try:
@@ -111,10 +111,13 @@ except:
 
 try:
     trim5_len = config['trim5']
+    trim3_len = config['trim3']
 except:
     trim5_len = 0
+    trim3_len = 0
 
 print("Trimming 5' end:", trim5_len)
+print("Trimming 3' end:", trim3_len)
 
 
 #get all samples from fastq Directory using the fastq2json.py scripts, then just
@@ -127,7 +130,7 @@ for SAMPLE, file in FILES.items():
     ALL_FASTQ.extend([os.path.abspath(i) for i in file.get('R1')])
     ALL_FASTQ.extend([os.path.abspath(i) for i in file.get('R2')])
 
-# CONFIG = [out_dir + "workup/logs/" + run_date + "config.log"]
+CONFIG = [out_dir + "workup/logs/config_" + run_date + "log"]
 
 #Shared
 TRIM = expand(out_dir + "workup/trimmed/{sample}_{read}.fq.gz", sample = ALL_SAMPLES, 
@@ -136,7 +139,6 @@ TRIM_LOG = expand(out_dir + "workup/trimmed/{sample}_{read}.fastq.gz_trimming_re
                   sample = ALL_SAMPLES, read = ["R1", "R2"])
 
 LE_LOG_ALL = [out_dir + "workup/ligation_efficiency.txt"]
-MASKED = expand(out_dir + "workup/alignments/{sample}.DNA.chr.masked.bam", sample=ALL_SAMPLES)
 MULTI_QC = [out_dir + "workup/qc/multiqc_report.html"]
 BARCODEID = expand(out_dir + "workup/fastqs/{sample}_{read}.barcoded.fastq.gz", sample = ALL_SAMPLES, 
                    read = ["R1", "R2"])
@@ -153,42 +155,46 @@ FASTQC = expand([out_dir + "workup/trimmed/{sample}_R1_bfull_trim_fastqc.html",
 
 CLUSTERS = expand(out_dir + "workup/clusters/{sample}.clusters", sample=ALL_SAMPLES)
 #Hisat2 alignment
-Ht2_RNA_ALIGN_SE = expand(out_dir + "workup/alignments/{sample}.SE.h2.{genome}.mapq20.bam", 
+Ht2_RNA_ALIGN_SE = expand(out_dir + "workup/alignments/{sample}.{genome}.SE.h2.mapq20.bam", 
                         sample=ALL_SAMPLES, genome=assembly)
-Ht2_RNA_ALIGN_PE = expand(out_dir + "workup/alignments/{sample}.PE.h2.{genome}.mapq20.bam", 
+Ht2_RNA_ALIGN_PE = expand(out_dir + "workup/alignments/{sample}.{genome}.PE.h2.mapq20.bam", 
                            sample=ALL_SAMPLES, genome=assembly)
 
-Ht2_ANNO_RNA_SE = expand(out_dir + "workup/alignments/{sample}.SE.h2.{genome}.mapq20.bam.featureCounts.bam",
+Ht2_ANNO_RNA_SE = expand(out_dir + "workup/alignments/{sample}.{genome}.SE.h2.mapq20.bam.featureCounts.bam",
                   sample=ALL_SAMPLES, genome=assembly)
-Ht2_ANNO_RNA_PE = expand(out_dir + "workup/alignments/{sample}.PE.h2.{genome}.mapq20.bam.featureCounts.bam",
+Ht2_ANNO_RNA_PE = expand(out_dir + "workup/alignments/{sample}.{genome}.PE.h2.mapq20.bam.featureCounts.bam",
                   sample=ALL_SAMPLES, genome=assembly)
+ADD_CHR = expand(out_dir + "workup/alignments/{sample}.{genome}.chr.bam", sample=ALL_SAMPLES, genome=assembly)
+
+UNIQUE =  expand(out_dir + "workup/alignments/{sample}.{genome}.chr.unique.bam", sample=ALL_SAMPLES, genome=assembly)
+
 CLUSTERS_PLOT = [out_dir + "workup/clusters/cluster_sizes.pdf", out_dir + "workup/clusters/cluster_sizes.png"]
 
 BOWTIE2_ALIGN = expand(out_dir + "workup/alignments/{sample}.DNA.b2.mapq20.bam", sample=ALL_SAMPLES)
 
-STAR_RNA = expand(out_dir + "workup/alignments/{sample}.{genome}.Aligned.sortedByCoord.out.mapq20.bam", 
+STAR_RNA = expand(out_dir + "workup/alignments/{sample}.{genome}.mapq20.bam", 
                    sample=ALL_SAMPLES, genome=assembly)
 
 if config['aligner'] == 'hisat2':
     if align_mode == "SE":
         rule all:
             input: CONFIG + ALL_FASTQ + TRIM + TRIM_LOG + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
-                Ht2_RNA_ALIGN_SE + Ht2_ANNO_RNA_SE + 
-                CLUSTERS + MULTI_QC + CLUSTERS_PLOT
+                Ht2_RNA_ALIGN_SE + #Ht2_ANNO_RNA_SE + 
+                ADD_CHR + UNIQUE + CLUSTERS + MULTI_QC + CLUSTERS_PLOT
     elif align_mode == "PE":
         rule all:
-            input: ALL_FASTQ + TRIM + TRIM_LOG + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
+            input: CONFIG + ALL_FASTQ + TRIM + TRIM_LOG + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
                 CUTADAPT + FASTQC + Ht2_RNA_ALIGN_PE + Ht2_ANNO_RNA_PE +
-                CLUSTERS + MULTI_QC + CLUSTERS_PLOT
+                ADD_CHR + UNIQUE + CLUSTERS + MULTI_QC + CLUSTERS_PLOT
 elif config['aligner'] == 'bowtie2':
         rule all:
             input: CONFIG + ALL_FASTQ + TRIM + TRIM_LOG + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
-                CLUSTERS + MULTI_QC + CLUSTERS_PLOT + BOWTIE2_ALIGN
+                CUTADAPT + ADD_CHR + UNIQUE + CLUSTERS + MULTI_QC + CLUSTERS_PLOT + BOWTIE2_ALIGN
 elif config['aligner'] == 'star':
         rule all:
-            input: ALL_FASTQ + TRIM + TRIM_LOG + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
+            input: CONFIG + ALL_FASTQ + TRIM + TRIM_LOG + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
                 CUTADAPT + FASTQC + STAR_RNA #+
-                #CLUSTERS + MULTI_QC + CLUSTERS_PLOT
+                #ADD_CHR + CLUSTERS + MULTI_QC + CLUSTERS_PLOT
 
 #Send and email if an error occurs during execution
 onerror:
@@ -243,15 +249,15 @@ rule adaptor_trimming_pe:
         {input} &> {log}"
 
 
-# rule log_config:
-#     '''Copy config.yaml and place in logs folder with the date run
-#     '''
-#     input:
-#         config_path
-#     output:
-#         out_dir + "workup/logs/" + run_date + "config.log"
-#     shell:
-#         "cp {input} {output}"
+rule log_config:
+    '''Copy config.yaml and place in logs folder with the date run
+    '''
+    input:
+        config_path
+    output:
+        out_dir + "workup/logs/config_" + run_date + "log"
+    shell:
+        "cp {input} {output}"
 
 
 
@@ -321,6 +327,12 @@ rule cutadapt_pe:
     Trim barcode sequences for paired end alignment
     --minimum-length 20 (don't filter on read length as single end alignment still valuable)
     -n 3
+    Read 1:
+    -a 3' adaptor
+    -g 5' adaptor
+    Read 2:
+    -A 3' adaptor
+    -G 5' adaptor
     '''
     input:
         [out_dir + "workup/fastqs/{sample}_R1.barcoded_full.fastq.gz", 
@@ -333,7 +345,7 @@ rule cutadapt_pe:
     params:
         adapters_r1 = "-a CAAGTCA",
         adapters_r2 = "-G TGACTTGNTTCG",
-        others = "-e 0.15"
+        others = "-e 0.15 -n 3"
     log:
         out_dir + "workup/logs/{sample}.cutadapt.log"
     wrapper:
@@ -374,20 +386,25 @@ rule hisat2_align:
     input:
         fq=out_dir + "workup/fastqs/{sample}_R1.barcoded_full.fastq.gz"
     output:
-        mapped=out_dir + "workup/alignments/{sample}.SE.hisat2.mapq20.bam"
+        mapped=out_dir + "workup/alignments/{sample}.{genome}.SE.h2.mapq20.bam"
     threads: 10
+    params:
+        ss = lambda wildcards: hisat2_ss[wildcards.genome],
+        index = lambda wildcards: hisat2_index[wildcards.genome]
     conda:
         "envs/hisat2.yaml"
     log:
-        "workup/logs/{sample}.hisat2.log"
+        out_dir + "workup/logs/{sample}.{genome}.SE.hisat2.log"
     shell:
         '''
         (hisat2 --sp 1000,1000 \
-        -p 10 \
+        -p {threads} \
         -t \
         --phred33 \
-        --known-splicesite-infile {hisat2_ss} \
-        -x {hisat2_index} \
+        --trim5 {trim5_len} \
+        --trim3 {trim3_len} \
+        --known-splicesite-infile {params.ss} \
+        -x {params.index} \
         -U {input.fq} | \
         samtools view -bq 20 -F 4 -F 256 - > {output.mapped}) &> {log}
         '''
@@ -412,10 +429,10 @@ rule hisat2_align_pe:
             in computation and memory usage.
     '''
     input:
-        fq_1=out_dir + "workup/fastqs/{sample}_R1.barcoded_full.fastq.gz",
-        fq_2=out_dir + "workup/fastqs/{sample}_R2.barcoded_full.fastq.gz"
+        fq_1=out_dir + "workup/trimmed/{sample}_R1_bfull_trim.fq.gz",
+        fq_2=out_dir + "workup/trimmed/{sample}_R2_bfull_trim.fq.gz"
     output:
-        out_dir + "workup/alignments/{sample}.PE.h2.{genome}.mapq20.bam"
+        out_dir + "workup/alignments/{sample}.{genome}.PE.h2.mapq20.bam"
     threads: 10
     params:
         ss = lambda wildcards: hisat2_ss[wildcards.genome],
@@ -423,7 +440,7 @@ rule hisat2_align_pe:
     conda:
         "envs/hisat2.yaml"
     log:
-        out_dir + "workup/logs/{sample}.{genome}.hisat2.log"
+        out_dir + "workup/logs/{sample}.{genome}.PE.hisat2.log"
     shell:
         ''' 
         (hisat2 \
@@ -434,6 +451,7 @@ rule hisat2_align_pe:
         -t \
         --phred33 \
         --trim5 {trim5_len} \
+        --trim3 {trim3_len} \
         --known-splicesite-infile {params.ss} \
         -x {params.index} \
         -1 {input.fq_1} -2 {input.fq_2} | \
@@ -451,7 +469,7 @@ rule bowtie2_align:
     -F: Do not output alignments with any bits set in INT present in the FLAG field
     '''
     input:
-        fq=out_dir + "workup/fastqs/{sample}_R1.barcoded_full.fastq.gz"
+        fq=out_dir + "workup/trimmed/{sample}_R1_bfull_trim.fq.gz"
     output:
         out_dir + "workup/alignments/{sample}.DNA.b2.mapq20.bam"
     threads: 10
@@ -467,6 +485,7 @@ rule bowtie2_align:
         -t \
         --phred33 \
         --trim5 {trim5_len} \
+        --trim3 {trim3_len} \
         -x {params.bowtie2_idx} \
         -U {input.fq} | \
         samtools view -bq 20 -F 4 -F 256 - > {output}) &> {log}"
@@ -483,13 +502,13 @@ rule star_align_rna:
     input:
         fq = out_dir + "workup/fastqs/{sample}_R1.barcoded_full.fastq.gz"
     output:
-        out_dir + "workup/alignments/{sample}.{genome}.Aligned.sortedByCoord.out.mapq20.bam",
+        out_dir + "workup/alignments/{sample}.{genome}.mapq20.bam",
         out_dir + "workup/alignments/{sample}.{genome}.Aligned.sortedByCoord.out.bam",
         out_dir + "workup/alignments/{sample}.{genome}.Log.final.out",
-        out_dir + "workup/alignments/{sample}.{genome}.Log.out",
-        out_dir + "workup/alignments/{sample}.{genome}.Log.progress.out",
         out_dir + "workup/alignments/{sample}.{genome}.SJ.out.tab",
         out_dir + "workup/alignments/{sample}.{genome}.unmapped.fastq.gz"
+    wildcard_constraints:
+        genome = ['hg38', 'mm10']
     log:
         out_dir + "workup/logs/{sample}.{genome}.star.log"
     threads: 10
@@ -510,8 +529,8 @@ rule star_align_rna:
 
         pigz {out_dir}workup/alignments/{wildcards.sample}.{wildcards.genome}.unmapped.fastq
 
-        samtools view -bq 20 {out_dir}workup/alignments/{wildcards.sample}.{wildcards.genome}.Aligned.sortedByCoord.out.bam > \
-            {out_dir}workup/alignments/{wildcards.sample}.{wildcards.genome}.Aligned.sortedByCoord.out.mapq20.bam
+        samtools view -bq 255 {out_dir}workup/alignments/{wildcards.sample}.{wildcards.genome}.Aligned.sortedByCoord.out.bam > \
+            {out_dir}workup/alignments/{wildcards.sample}.{wildcards.genome}.mapq20.bam
         '''
 
 
@@ -538,14 +557,14 @@ rule annotate_rna:
                         extracted from annotation using the provided value.
     '''
     input:
-        out_dir + "workup/alignments/{sample}.SE.h2.{genome}.mapq20.bam" if align_mode == "SE" else
-        out_dir + "workup/alignments/{sample}.PE.h2.{genome}.mapq20.bam"
+        out_dir + "workup/alignments/{sample}.{genome}.SE.h2.mapq20.bam" if align_mode == "SE" else
+        out_dir + "workup/alignments/{sample}.{genome}.PE.h2.mapq20.bam"
     threads: 10
     output:
-        bam=out_dir + "workup/alignments/{sample}.SE.h2.{genome}.mapq20.bam.featureCounts.bam" if align_mode == "SE" else
-            out_dir + "workup/alignments/{sample}.PE.h2.{genome}.mapq20.bam.featureCounts.bam",
-        counts=out_dir + "workup/alignments/{sample}.SE.h2.{genome}.mapq20.bam.featureCounts.txt" if align_mode == "SE" else
-               out_dir + "workup/alignments/{sample}.PE.h2.{genome}.mapq20.bam.featureCounts.txt"
+        bam=out_dir + "workup/alignments/{sample}.{genome}.SE.h2.mapq20.bam.featureCounts.bam" if align_mode == "SE" else
+            out_dir + "workup/alignments/{sample}.{genome}.PE.h2.mapq20.bam.featureCounts.bam",
+        counts=out_dir + "workup/alignments/{sample}.{genome}.SE.h2.mapq20.bam.featureCounts.txt" if align_mode == "SE" else
+               out_dir + "workup/alignments/{sample}.{genome}.PE.h2.mapq20.bam.featureCounts.txt"
     log:
         out_dir + "workup/logs/{sample}.{genome}.anno.log"
     params:
@@ -563,8 +582,8 @@ rule annotate_rna:
 
 rule add_chr:
     input:
-        out_dir + "workup/alignments/{sample}.SE.h2.{genome}.mapq20.bam.featureCounts.bam" if align_mode == "SE" else
-        out_dir + "workup/alignments/{sample}.PE.h2.{genome}.mapq20.bam.featureCounts.bam"
+        out_dir + "workup/alignments/{sample}.{genome}.SE.h2.mapq20.bam" if align_mode == "SE" else
+        out_dir + "workup/alignments/{sample}.{genome}.PE.h2.mapq20.bam"
     output:
         out_dir + "workup/alignments/{sample}.{genome}.chr.bam"
     log:
@@ -577,9 +596,23 @@ rule add_chr:
         '''
 
 
-rule make_clusters:
+rule remove_multi_assembly_aligners:
     input:
         expand(out_dir + "workup/alignments/{sample}.{genome}.chr.bam", 
+               sample=ALL_SAMPLES, genome=assembly)
+    output:
+        out_dir + "workup/alignments/{sample}.{genome}.chr.unique.bam"
+    conda:
+        "envs/python_dep.yaml"
+    shell:
+        '''
+        python {remove_multi} -i {input} &> {out_dir}workup/logs/multi_assembly_align.log
+        '''
+
+
+rule make_clusters:
+    input:
+        expand(out_dir + "workup/alignments/{sample}.{genome}.chr.unique.bam", 
                sample=ALL_SAMPLES, genome=assembly)
     output:
         out_dir + "workup/clusters/{sample}.clusters"
@@ -606,7 +639,7 @@ rule multiqc:
     conda: 
         "envs/qc.yaml"
     shell: 
-        "multiqc workup -o {out_dir}workup/qc"
+        "multiqc {out_dir}workup -o {out_dir}workup/qc"
 
 
 rule plot_cluster_size:
@@ -623,7 +656,7 @@ rule plot_cluster_size:
         '''
         Rscript scripts/r/get_cluster_size_distribution.r \
             {out_dir}workup/clusters/ \
-            .clusters
+            "\\.clusters"
         '''
 
 

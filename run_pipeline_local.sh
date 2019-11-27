@@ -5,4 +5,5 @@ mkdir -p workup/logs
 
 snakemake \
 --snakefile Snakefile \
---use-conda
+--use-conda \
+--cores 5
