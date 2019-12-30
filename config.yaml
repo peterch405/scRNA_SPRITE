@@ -1,21 +1,32 @@
 #email to which errors will be sent
 email: "your_email@domain"
 #Location of the config file for barcodeIdentification
-bID: "/mnt/data/scRNA/20191122_HumMus/config.txt"
+bID: "/mnt/data/scRNA/20191205_scrna_mus_hs_2/config.txt"
 #Location of the samples json file produced with fastq2json.py script
-samples: "/mnt/data/scRNA/20191122_HumMus/samples.json"
+samples: "/mnt/data/scRNA/20191205_scrna_mus_hs_2/samples.json"
 #output directory
-output_dir: "/mnt/data/scRNA/20191122_HumMus/"
+output_dir: "/mnt/data/scRNA/20191205_scrna_mus_hs_2/"
+########################################################################################   
+#Alignment settings
+########################################################################################
 #Currently "mm10" and "hg38" or "mm10&hg38" available
-assembly: "mm10"
+assembly: "mm10&hg38"
+mapq_filter: 20
 #Number of barcodes used
 num_tags: "4"
 #Paired end alignment or single end "PE" or "SE"
 align_mode: "PE"
-#Trim length from 5' end
+#Trim length from 5' end and 3' end
 trim5: 0
+trim3: 0
 #Aligner
-aligner: "star"
+aligner: "hisat2"
+#Additional aligner settings
+hisat2_settings: "--transcriptome-mapping-only" #"--sp 1000,1000"
+bowtie2_settings: ""
+########################################################################################   
+#Indexes
+########################################################################################
 #Hisat2 indexes location with prefix
 hisat2_index:
     mm10: "/mnt/data/genomes/GRCm38.p6/GRCm38.p6"
@@ -35,3 +46,6 @@ bowtie2_index:
 star_index:
     mm10: "/mnt/data/genomes/GRCm38.p6/star"
     hg38: "/mnt/data/genomes//GRCh38/star"
+filters:
+    mm10: "/mnt/data/genomes/GRCm38.p6/GRCm38.95_protein_coding_exon.bed"
+    hg38: "/mnt/data/genomes/GRCh38/GRCh38.97_protein_coding_exon.bed"

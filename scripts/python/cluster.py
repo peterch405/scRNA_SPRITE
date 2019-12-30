@@ -1,15 +1,17 @@
+
 import pysam
 import re
 import gzip
 import os
 import sys
+from collections import defaultdict
 
 class Position:
     """This class represents a genomic position, with type of nucleic acid (DNA)
 
     Methods:
     - to_string(): Returns a string representation of this position in the form
-      "DNA(feature)_chrX:1000"
+      "DNA[feature]_chrX:1000-1500"
     """
 
     def __init__(self, type, feature, chromosome, start_coordinate, end_coordinate):
@@ -36,8 +38,8 @@ class Position:
     def to_string(self):
         try:
             out = self._type + "[" + self._feature + "]" + "_" + \
-                self._chromosome + ":" + \
-                str(self._start_coordinate) + "-" + str(self._end_coordinate)
+                  self._chromosome + ":" + \
+                  str(self._start_coordinate) + "-" + str(self._end_coordinate)
         except:
             print(self._type, self._feature, self._chromosome)
             print('Elements are not as expect!')
@@ -73,6 +75,11 @@ class Cluster:
     def to_string(self):
         position_strings = [position.to_string() for position in self._positions]
         return "\t".join(position_strings)
+    
+    def to_list(self):
+        position_strings = [position.to_string() for position in self._positions]
+        return position_strings
+
 
 
 class Clusters:
@@ -81,13 +88,17 @@ class Clusters:
     Methods:
     - get_cluster(barcode): Returns the cluster that corresponds to the given
       barcode. If the cluster does not exist, it is initialized (with zero
-      positions), and this cluster.to_string()cluster.to_string()cluster.to_string()cluster.to_string()cluster.to_string()empty cluster is returned.
+      positions), and this empty cluster is returned.
 
     - add_position(barcode, position): Adds the position to the cluster
       that corresponds with the given barcodes
 
     - to_strings(): Returns an iterator over the string representations of all
       of the contained clusters.
+
+    - remove_cluster(barcode): Removes a cluster with the specified barcode
+
+    - unique(): 
     """
     def __init__(self):
         self._clusters = {}
@@ -107,9 +118,11 @@ class Clusters:
     def remove_cluster(self, barcode):
         del self._clusters[barcode]
 
-    def unique(self):
+    def make_lookup(self):
+        lookup = defaultdict(set)
         for barcode, cluster in self._clusters.items():
-            yield barcode + '\t' + cluster.unique()
+            lookup[barcode].update(cluster.to_list())
+        return lookup 
 
 
 
@@ -157,7 +170,7 @@ def get_clusters(bamfile, num_tags):
                         gene_anno = ''
                     
                     
-                    anno = ';'.join(filter(None, [assembly, gene_anno]))
+                    anno = ';'.join(filter(None, [assembly, gene_anno, strand]))
 
                     position = Position('DNA', anno, read.reference_name,
                                         read.reference_start, read.reference_end)
@@ -190,49 +203,6 @@ def write_clusters_to_file(clusters, outfile, unique=False):
     print('Number of clusters written:',count)
 
 
-def fastq_parse(fp):
-    """
-    Parse fastq file.
-    """
-    linecount = 0
-    name, seq, thrd, qual = [None] * 4
-    for line in fp:
-
-        linecount += 1
-        if linecount % 4 == 1:
-            try:
-                name = line.decode('UTF-8').rstrip()
-            except AttributeError:
-                name = line.rstrip()
-            assert name.startswith('@'),\
-                   "ERROR: The 1st line in fastq element does not start with '@'.\n\
-                   Please check FastQ file near line number %s" % (linecount)
-        elif linecount % 4 == 2:
-            try:
-                seq = line.decode('UTF-8').rstrip()
-            except AttributeError:
-                seq = line.rstrip()
-        elif linecount % 4 == 3:
-            try:
-                thrd = line.decode('UTF-8').rstrip()
-            except AttributeError:
-                thrd = line.rstrip()
-            assert thrd.startswith('+'),\
-                   "ERROR: The 3st line in fastq element does not start with '+'.\n\
-                   Please check FastQ file near line number %s" % (linecount)
-        elif linecount % 4 == 0:
-            try:
-                qual = line.decode('UTF-8').rstrip()
-            except AttributeError:
-                qual = line.rstrip()
-            assert len(seq) == len(qual),\
-                    "ERROR: The length of Sequence and Quality aren't equal.\n\
-                    Please check FastQ file near line number %s" % (linecount)
-
-            yield name, seq, thrd, qual,
-            name, seq, thrd, qual = [None] * 4
-
-
 
 def file_open(filename):
     """
@@ -247,3 +217,95 @@ def file_open(filename):
     else:
         f.seek(0)
         return f
+
+
+def parse_cluster(c_file):
+    '''
+    Parse cluster file
+
+    Args:
+        c_file(str): input path of cluster file
+    '''
+
+    total_reads = 0
+    clusters = Clusters()
+    pattern = re.compile('([a-zA-Z0-9]+)\[([a-zA-Z0-9_;\-\+]+)\]_([a-zA-Z0-9_\-]+):([0-9]+)\-([0-9]+)')
+    # match = pattern.search('DNA[hg38;+]_chrX:78818752-78819946')
+    with file_open(c_file) as c:
+        for line in c:
+
+            barcode, *reads = line.decode('utf-8').rstrip('\n').split('\t')
+
+            for read in reads:
+                total_reads += 1
+                try:
+                    match = pattern.search(read)
+                    n_type, anno, chrom, start, end = match.groups()
+                    position = Position(n_type, anno, chrom, start, end)
+                    clusters.add_position(barcode, position)
+                except:
+                    print(read)
+                    raise Exception('Pattern did not match above printed string')
+    print('Total cluster reads:', total_reads)
+    return(clusters)
+
+
+# clusters_test = parse_cluster('/mnt/data/scRNA/20191205_scrna_mus_hs_2/workup/clusters/scrna-mus-hs-2_S1_L001.clusters')
+
+
+
+
+def write_bam(cluster, num_tags, original_bam, output_bam):
+    '''From a cluster make/subset bam file
+    If barcode, chrom, start and end coordinates match, write out read into new BAM
+
+    Args:
+        cluster(Clusters): 
+    '''
+
+    #get sample name from bamfile
+    file_name = os.path.basename(original_bam)
+    sample_name = file_name.split('.')[0]
+
+    pattern = re.compile('::' + num_tags * '\[([a-zA-Z0-9_\-]+)\]')
+
+    #get genome build
+    if 'hg38' in file_name:
+        assembly = 'hg38'
+    elif 'mm10' in file_name:
+        assembly = 'mm10'
+
+    read_lookup = cluster.make_lookup()
+    out_reads = 0
+    with pysam.AlignmentFile(original_bam, "rb") as in_bam:
+        out_bam = pysam.AlignmentFile(output_bam, "wb", template = in_bam)
+        for read in in_bam.fetch(until_eof = True):
+            name = read.query_name
+            match = pattern.search(name)
+            barcode = list(match.groups())
+            strand = '+' if not read.is_reverse else '-'
+                        
+
+            if read.has_tag('XT'):
+                gene_anno = read.get_tag('XT')
+            elif read.has_tag('XS'):
+                gene_anno = read.get_tag('XS')
+            else:
+                gene_anno = ''
+                    
+                    
+            anno = ';'.join(filter(None, [assembly, gene_anno, strand]))
+            barcode.append(sample_name)
+            barcode_str = ".".join(barcode)
+
+            position = Position('DNA', anno, read.reference_name,
+                                read.reference_start, read.reference_end)
+
+            barcode_reads = read_lookup.get(barcode_str, "Not present")
+         
+            if position.to_string() in barcode_reads:
+                out_bam.write(read)
+                out_reads += 1 
+
+    out_bam.close()
+    print('Total reads written:', out_reads)

@@ -57,6 +57,12 @@ except:
     num_tags = "5"
     print('Config "num_tags" not specified, using:', num_tags)
 
+try:
+    filters = config['filters']
+except:
+    print('Config "filters" not specified in config.yaml')
+    sys.exit()
+
 #Make pipeline compatible for multiple assemblies
 try:
     assembly = config['assembly'].split('&')
@@ -120,6 +126,27 @@ print("Trimming 5' end:", trim5_len)
 print("Trimming 3' end:", trim3_len)
 
 
+#Additional hisat2 flags
+try:
+    h2_add_settings = config["hisat2_settings"]
+except:
+    h2_add_settings = ''
+
+#Additional bowtie2 flags
+try:
+    b2_add_settings = config["bowtie2_settings"]
+except:
+    b2_add_settings = ''
+
+#Mapq filter
+if config['aligner'] == 'star':
+    mapq = 255
+else:
+    try:
+        mapq = config["mapq_filter"]
+    except:
+        mapq = 20
+
 #get all samples from fastq Directory using the fastq2json.py scripts, then just
 #load the json file with the samples
 FILES = json.load(open(samples))
@@ -130,20 +157,21 @@ for SAMPLE, file in FILES.items():
     ALL_FASTQ.extend([os.path.abspath(i) for i in file.get('R1')])
     ALL_FASTQ.extend([os.path.abspath(i) for i in file.get('R2')])
 
-CONFIG = [out_dir + "workup/logs/config_" + run_date + "log"]
+CONFIG = [out_dir + "workup/logs/config_" + run_date + "yaml"]
 
 #Shared
 TRIM = expand(out_dir + "workup/trimmed/{sample}_{read}.fq.gz", sample = ALL_SAMPLES, 
               read = ["R1_val_1", "R2_val_2"])
-TRIM_LOG = expand(out_dir + "workup/trimmed/{sample}_{read}.fastq.gz_trimming_report.txt", 
-                  sample = ALL_SAMPLES, read = ["R1", "R2"])
+# TRIM_LOG = expand(out_dir + "workup/trimmed/{sample}_{read}.fastq.gz_trimming_report.txt", 
+#                   sample = ALL_SAMPLES, read = ["R1", "R2"])
 
 LE_LOG_ALL = [out_dir + "workup/ligation_efficiency.txt"]
 MULTI_QC = [out_dir + "workup/qc/multiqc_report.html"]
-BARCODEID = expand(out_dir + "workup/fastqs/{sample}_{read}.barcoded.fastq.gz", sample = ALL_SAMPLES, 
-                   read = ["R1", "R2"])
+BARCODEID = expand(out_dir + "workup/fastqs/{sample}_{read}.barcoded.fastq.gz", 
+                   sample = ALL_SAMPLES, read = ["R1", "R2"])
 BARCODE_FULL = expand([out_dir + "workup/fastqs/{sample}_R1.barcoded_full.fastq.gz",
-                       out_dir + "workup/fastqs/{sample}_R2.barcoded_full.fastq.gz"], sample=ALL_SAMPLES)
+                       out_dir + "workup/fastqs/{sample}_R2.barcoded_full.fastq.gz"], 
+                       sample=ALL_SAMPLES)
 
 CUTADAPT = expand([out_dir + "workup/trimmed/{sample}_R1_bfull_trim.fq.gz",
                    out_dir + "workup/trimmed/{sample}_R2_bfull_trim.fq.gz"],
@@ -153,48 +181,68 @@ FASTQC = expand([out_dir + "workup/trimmed/{sample}_R1_bfull_trim_fastqc.html",
                  out_dir + "workup/trimmed/{sample}_R2_bfull_trim_fastqc.html"],
                  sample = ALL_SAMPLES)
 
-CLUSTERS = expand(out_dir + "workup/clusters/{sample}.clusters", sample=ALL_SAMPLES)
 #Hisat2 alignment
-Ht2_RNA_ALIGN_SE = expand(out_dir + "workup/alignments/{sample}.{genome}.SE.h2.mapq20.bam", 
+Ht2_RNA_ALIGN_SE = expand(out_dir + "workup/alignments/{sample}.{genome}.SE.h2.bam", 
                         sample=ALL_SAMPLES, genome=assembly)
-Ht2_RNA_ALIGN_PE = expand(out_dir + "workup/alignments/{sample}.{genome}.PE.h2.mapq20.bam", 
+Ht2_RNA_ALIGN_PE = expand(out_dir + "workup/alignments/{sample}.{genome}.PE.h2.bam", 
                            sample=ALL_SAMPLES, genome=assembly)
 
-Ht2_ANNO_RNA_SE = expand(out_dir + "workup/alignments/{sample}.{genome}.SE.h2.mapq20.bam.featureCounts.bam",
+Ht2_ANNO_RNA_SE = expand(out_dir + "workup/alignments/{sample}.{genome}.SE.h2.bam.featureCounts.bam",
                   sample=ALL_SAMPLES, genome=assembly)
-Ht2_ANNO_RNA_PE = expand(out_dir + "workup/alignments/{sample}.{genome}.PE.h2.mapq20.bam.featureCounts.bam",
+Ht2_ANNO_RNA_PE = expand(out_dir + "workup/alignments/{sample}.{genome}.PE.h2.bam.featureCounts.bam",
                   sample=ALL_SAMPLES, genome=assembly)
-ADD_CHR = expand(out_dir + "workup/alignments/{sample}.{genome}.chr.bam", sample=ALL_SAMPLES, genome=assembly)
+ADD_CHR = expand(out_dir + "workup/alignments/{sample}.{genome}.chr.bam", 
+                 sample=ALL_SAMPLES, genome=assembly)
 
-UNIQUE =  expand(out_dir + "workup/alignments/{sample}.{genome}.chr.unique.bam", sample=ALL_SAMPLES, genome=assembly)
+UNIQUE =  expand(out_dir + "workup/alignments/{sample}.{genome}.chr.unique.bam", 
+                 sample=ALL_SAMPLES, genome=assembly)
 
-CLUSTERS_PLOT = [out_dir + "workup/clusters/cluster_sizes.pdf", out_dir + "workup/clusters/cluster_sizes.png"]
-
-BOWTIE2_ALIGN = expand(out_dir + "workup/alignments/{sample}.DNA.b2.mapq20.bam", sample=ALL_SAMPLES)
-
-STAR_RNA = expand(out_dir + "workup/alignments/{sample}.{genome}.mapq20.bam", 
+FILTERED =  expand(out_dir + "workup/alignments/{sample}.{genome}.filt.bam", 
                    sample=ALL_SAMPLES, genome=assembly)
+
+CLUSTERS_PLOT = [out_dir + "workup/clusters/cluster_sizes.pdf", 
+                 out_dir + "workup/clusters/cluster_sizes.png"]
+
+BOWTIE2_ALIGN = expand(out_dir + "workup/alignments/{sample}.DNA.b2.bam", 
+                       sample=ALL_SAMPLES)
+
+STAR_RNA = expand(out_dir + "workup/alignments/{sample}.{genome}.bam", 
+                   sample=ALL_SAMPLES, genome=assembly)
+
+FLAGSTAT = expand([out_dir + "workup/alignments/{sample}.{genome}.chr.bam.flagstat",
+                   out_dir + "workup/alignments/{sample}.{genome}.bam.flagstat",
+                   out_dir + "workup/alignments/{sample}.{genome}.chr.unique.bam.flagstat",
+                   out_dir + "workup/alignments/{sample}.{genome}.filt.bam.flagstat"], 
+                   sample=ALL_SAMPLES, genome=assembly)
+
+MAPQ = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.chr.unique.mapq{mapq}.bam",
+              sample=ALL_SAMPLES, genome=assembly)
+CLUSTERS = expand(out_dir + "workup/clusters/{sample}.clusters", sample=ALL_SAMPLES)
+
 
 if config['aligner'] == 'hisat2':
     if align_mode == "SE":
         rule all:
-            input: CONFIG + ALL_FASTQ + TRIM + TRIM_LOG + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
-                Ht2_RNA_ALIGN_SE + #Ht2_ANNO_RNA_SE + 
-                ADD_CHR + UNIQUE + CLUSTERS + MULTI_QC + CLUSTERS_PLOT
+            input: CONFIG + ALL_FASTQ + TRIM + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
+                CUTADAPT + Ht2_RNA_ALIGN_SE + #Ht2_ANNO_RNA_SE + 
+                ADD_CHR + UNIQUE + FILTERED + CLUSTERS + MULTI_QC + CLUSTERS_PLOT + FLAGSTAT + 
+                MAPQ
     elif align_mode == "PE":
         rule all:
-            input: CONFIG + ALL_FASTQ + TRIM + TRIM_LOG + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
-                CUTADAPT + FASTQC + Ht2_RNA_ALIGN_PE + Ht2_ANNO_RNA_PE +
-                ADD_CHR + UNIQUE + CLUSTERS + MULTI_QC + CLUSTERS_PLOT
+            input: CONFIG + ALL_FASTQ + TRIM + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
+                CUTADAPT + FASTQC + #Ht2_RNA_ALIGN_PE + Ht2_ANNO_RNA_PE +
+                ADD_CHR + UNIQUE + FILTERED+ CLUSTERS + MULTI_QC + CLUSTERS_PLOT + FLAGSTAT +
+                MAPQ
 elif config['aligner'] == 'bowtie2':
         rule all:
-            input: CONFIG + ALL_FASTQ + TRIM + TRIM_LOG + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
-                CUTADAPT + ADD_CHR + UNIQUE + CLUSTERS + MULTI_QC + CLUSTERS_PLOT + BOWTIE2_ALIGN
+            input: CONFIG + ALL_FASTQ + TRIM + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
+                CUTADAPT + ADD_CHR + UNIQUE + FILTERED + CLUSTERS + MULTI_QC + CLUSTERS_PLOT + 
+                BOWTIE2_ALIGN + FLAGSTAT + MAPQ
 elif config['aligner'] == 'star':
         rule all:
-            input: CONFIG + ALL_FASTQ + TRIM + TRIM_LOG + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
+            input: CONFIG + ALL_FASTQ + TRIM + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
                 CUTADAPT + FASTQC + STAR_RNA #+
-                #ADD_CHR + CLUSTERS + MULTI_QC + CLUSTERS_PLOT
+                #ADD_CHR + CLUSTERS + MULTI_QC + CLUSTERS_PLOT + FLAGSTAT
 
 #Send and email if an error occurs during execution
 onerror:
@@ -224,9 +272,11 @@ RNA_star_params = "--runMode alignReads \
 #Trimming and barcode identification
 ####################################################################################################
 
-#Trim adaptors
-#multiple cores requires pigz to be installed on the system
 rule adaptor_trimming_pe:
+    '''
+    Trim adaptors
+    multiple cores requires pigz to be installed on the system
+    '''
     input:
         [lambda wildcards: FILES[wildcards.sample]['R1'],
         lambda wildcards: FILES[wildcards.sample]['R2']]
@@ -255,7 +305,7 @@ rule log_config:
     input:
         config_path
     output:
-        out_dir + "workup/logs/config_" + run_date + "log"
+        out_dir + "workup/logs/config_" + run_date + "yaml"
     shell:
         "cp {input} {output}"
 
@@ -286,6 +336,8 @@ rule get_ligation_efficiency:
         r1 = out_dir + "workup/fastqs/{sample}_R1.barcoded.fastq.gz"
     output:
         temp(out_dir + "workup/{sample}.ligation_efficiency.txt")
+    conda:
+        "envs/python_dep.yaml"
     shell:
         "python {lig_eff} {input.r1} > {output}"
 
@@ -333,6 +385,7 @@ rule cutadapt_pe:
     Read 2:
     -A 3' adaptor
     -G 5' adaptor
+    in r2 TGACTTGNTTCG
     '''
     input:
         [out_dir + "workup/fastqs/{sample}_R1.barcoded_full.fastq.gz", 
@@ -343,14 +396,14 @@ rule cutadapt_pe:
         qc=out_dir + "workup/trimmed/{sample}.trim.qc.txt"
     threads: 10
     params:
-        adapters_r1 = "-a CAAGTCA",
-        adapters_r2 = "-G TGACTTGNTTCG",
-        others = "-e 0.15 -n 3"
+        adapters_r1 = "-a CAAGTCA -a AGTTGTC",
+        adapters_r2 = "-G TGACTTG",
+        others = "-e 0.15 -n 6 --minimum-length 15"
     log:
         out_dir + "workup/logs/{sample}.cutadapt.log"
     wrapper:
         "0.38.0/bio/cutadapt/pe"
-
+# r"(?e)(CAAGTCA){e<=1}|(?e)(AGTTGTC){e<=1}"
 
 rule fastqc:
     input:
@@ -384,31 +437,34 @@ rule hisat2_align:
     #-U FILE Write alignments that are not selected by the various filter options to FILE
     '''
     input:
-        fq=out_dir + "workup/fastqs/{sample}_R1.barcoded_full.fastq.gz"
+        fq=out_dir + "workup/trimmed/{sample}_R1_bfull_trim.fq.gz"
     output:
-        mapped=out_dir + "workup/alignments/{sample}.{genome}.SE.h2.mapq20.bam"
+        mapped=out_dir + "workup/alignments/{sample}.{genome}.SE.h2.bam"
     threads: 10
     params:
         ss = lambda wildcards: hisat2_ss[wildcards.genome],
-        index = lambda wildcards: hisat2_index[wildcards.genome]
-    conda:
-        "envs/hisat2.yaml"
+        index = lambda wildcards: hisat2_index[wildcards.genome],
+        # mq_filter = mapq
+    # conda:
+    #     "envs/hisat2.yaml"
     log:
         out_dir + "workup/logs/{sample}.{genome}.SE.hisat2.log"
     shell:
         '''
-        (hisat2 --sp 1000,1000 \
+        (hisat2 \
         -p {threads} \
         -t \
         --phred33 \
+        --summary-file \
+        {h2_add_settings} \
         --trim5 {trim5_len} \
         --trim3 {trim3_len} \
         --known-splicesite-infile {params.ss} \
         -x {params.index} \
         -U {input.fq} | \
-        samtools view -bq 20 -F 4 -F 256 - > {output.mapped}) &> {log}
+        samtools view -b -F 4 -F 256 - > {output.mapped}) &> {log}
         '''
-
+# q {params.mq_filter}
  # params:
         # index = lambda wildcards, output, input: if 'hg38'
   
@@ -432,35 +488,38 @@ rule hisat2_align_pe:
         fq_1=out_dir + "workup/trimmed/{sample}_R1_bfull_trim.fq.gz",
         fq_2=out_dir + "workup/trimmed/{sample}_R2_bfull_trim.fq.gz"
     output:
-        out_dir + "workup/alignments/{sample}.{genome}.PE.h2.mapq20.bam"
+        out_dir + "workup/alignments/{sample}.{genome}.PE.h2.bam"
     threads: 10
     params:
         ss = lambda wildcards: hisat2_ss[wildcards.genome],
-        index = lambda wildcards: hisat2_index[wildcards.genome]
-    conda:
-        "envs/hisat2.yaml"
+        index = lambda wildcards: hisat2_index[wildcards.genome],
+        # mq_filter = mapq
+    # conda:
+    #     "envs/hisat2.yaml"
     log:
         out_dir + "workup/logs/{sample}.{genome}.PE.hisat2.log"
     shell:
         ''' 
         (hisat2 \
-        --sp 1000,1000 \
-        --no-discordant \
         --dta \
         -p {threads} \
         -t \
+        --no-discordant \
+        --no-mixed \
         --phred33 \
+        --summary-file \
+        {h2_add_settings} \
         --trim5 {trim5_len} \
         --trim3 {trim3_len} \
         --known-splicesite-infile {params.ss} \
         -x {params.index} \
         -1 {input.fq_1} -2 {input.fq_2} | \
-        samtools view -bq 20 -F 4 -F 256 - > {output}) &> {log}
+        samtools view -b -F 4 -F 256 - > {output}) &> {log}
         '''
-# 
-# 
+# q {params.mq_filter}
+# --sp 1000,1000 \
 # --no-mixed \
-
+# --no-discordant \
 
 
 rule bowtie2_align:
@@ -471,12 +530,13 @@ rule bowtie2_align:
     input:
         fq=out_dir + "workup/trimmed/{sample}_R1_bfull_trim.fq.gz"
     output:
-        out_dir + "workup/alignments/{sample}.DNA.b2.mapq20.bam"
+        out_dir + "workup/alignments/{sample}.DNA.b2.bam"
     threads: 10
     params:
-        bowtie2_idx = lambda wildcards: bowtie2_index[wildcards.genome]
+        bowtie2_idx = lambda wildcards: bowtie2_index[wildcards.genome],
+        # mq_filter = mapq
     log:
-        out_dir + "workup/logs/{sample}.bowtie2.log"
+        out_dir + "workup/logs/{sample}.bowtie2.log"       
     conda:
         "envs/bowtie2.yaml"
     shell:
@@ -484,12 +544,13 @@ rule bowtie2_align:
         -p 10 \
         -t \
         --phred33 \
+        {b2_add_settings} \
         --trim5 {trim5_len} \
         --trim3 {trim3_len} \
         -x {params.bowtie2_idx} \
         -U {input.fq} | \
-        samtools view -bq 20 -F 4 -F 256 - > {output}) &> {log}"
-
+        samtools view -b -F 4 -F 256 - > {output}) &> {log}"
+# q {params.mq_filter}
 
 
 
@@ -502,7 +563,7 @@ rule star_align_rna:
     input:
         fq = out_dir + "workup/fastqs/{sample}_R1.barcoded_full.fastq.gz"
     output:
-        out_dir + "workup/alignments/{sample}.{genome}.mapq20.bam",
+        out_dir + "workup/alignments/{sample}.{genome}.bam",
         out_dir + "workup/alignments/{sample}.{genome}.Aligned.sortedByCoord.out.bam",
         out_dir + "workup/alignments/{sample}.{genome}.Log.final.out",
         out_dir + "workup/alignments/{sample}.{genome}.SJ.out.tab",
@@ -529,10 +590,9 @@ rule star_align_rna:
 
         pigz {out_dir}workup/alignments/{wildcards.sample}.{wildcards.genome}.unmapped.fastq
 
-        samtools view -bq 255 {out_dir}workup/alignments/{wildcards.sample}.{wildcards.genome}.Aligned.sortedByCoord.out.bam > \
-            {out_dir}workup/alignments/{wildcards.sample}.{wildcards.genome}.mapq20.bam
         '''
-
+   # samtools view -bq 255 {out_dir}workup/alignments/{wildcards.sample}.{wildcards.genome}.Aligned.sortedByCoord.out.bam > \
+        #     {out_dir}workup/alignments/{wildcards.sample}.{wildcards.genome}.mapq20.bam
 
 
 
@@ -557,14 +617,11 @@ rule annotate_rna:
                         extracted from annotation using the provided value.
     '''
     input:
-        out_dir + "workup/alignments/{sample}.{genome}.SE.h2.mapq20.bam" if align_mode == "SE" else
-        out_dir + "workup/alignments/{sample}.{genome}.PE.h2.mapq20.bam"
+        out_dir + f"workup/alignments/{{sample}}.{{genome}}.{align_mode}.h2.bam"
     threads: 10
     output:
-        bam=out_dir + "workup/alignments/{sample}.{genome}.SE.h2.mapq20.bam.featureCounts.bam" if align_mode == "SE" else
-            out_dir + "workup/alignments/{sample}.{genome}.PE.h2.mapq20.bam.featureCounts.bam",
-        counts=out_dir + "workup/alignments/{sample}.{genome}.SE.h2.mapq20.bam.featureCounts.txt" if align_mode == "SE" else
-               out_dir + "workup/alignments/{sample}.{genome}.PE.h2.mapq20.bam.featureCounts.txt"
+        bam=out_dir + f"workup/alignments/{{sample}}.{{genome}}.{align_mode}.h2.bam.featureCounts.bam",
+        counts=out_dir + f"workup/alignments/{{sample}}.{{genome}}.{align_mode}.h2.bam.featureCounts.txt"
     log:
         out_dir + "workup/logs/{sample}.{genome}.anno.log"
     params:
@@ -579,11 +636,28 @@ rule annotate_rna:
         {input}
         '''
 
+rule filter_reads:
+    '''
+    Filter, keeping only reads within protein coding genes. (Alternatively, Repeatmask filter)
+    -v 	Only report those entries in A that have no overlap in B. Restricted by -f and -r.
+    '''
+    input:
+        out_dir + f"workup/alignments/{{sample}}.{{genome}}.{align_mode}.h2.bam"
+    output:
+        out_dir + "workup/alignments/{sample}.{genome}.filt.bam"
+    params:
+        mask = lambda wildcards: filters[wildcards.genome]
+    conda:
+        "envs/bedtools.yaml"
+    shell:
+        '''
+        bedtools intersect -a {input} -b {params.mask} > {output}
+        '''
+
 
 rule add_chr:
     input:
-        out_dir + "workup/alignments/{sample}.{genome}.SE.h2.mapq20.bam" if align_mode == "SE" else
-        out_dir + "workup/alignments/{sample}.{genome}.PE.h2.mapq20.bam"
+        out_dir + "workup/alignments/{sample}.{genome}.filt.bam"
     output:
         out_dir + "workup/alignments/{sample}.{genome}.chr.bam"
     log:
@@ -610,9 +684,57 @@ rule remove_multi_assembly_aligners:
         '''
 
 
+
+rule flagstat_bam:
+    '''
+    Check number of reads mapped with samtools flagstat
+    This is so the alignment stats will be included in multiqc
+    '''
+    input: 
+        bam=out_dir + f"workup/alignments/{{sample}}.{{genome}}.{align_mode}.h2.bam",
+        chr=out_dir + "workup/alignments/{sample}.{genome}.chr.bam",
+        unq=out_dir + "workup/alignments/{sample}.{genome}.chr.unique.bam",
+        filt=out_dir + "workup/alignments/{sample}.{genome}.filt.bam"
+    output: 
+        bam=out_dir + "workup/alignments/{sample}.{genome}.bam.flagstat",
+        chr=out_dir + "workup/alignments/{sample}.{genome}.chr.bam.flagstat",
+        unq=out_dir + "workup/alignments/{sample}.{genome}.chr.unique.bam.flagstat",
+        filt=out_dir + "workup/alignments/{sample}.{genome}.filt.bam.flagstat"
+    log:
+        bam=out_dir + "workup/logs/{sample}.{genome}.flagstat_bam",    
+        chr=out_dir + "workup/logs/{sample}.{genome}.chr.flagstat_bam",
+        unq=out_dir + "workup/logs/{sample}.{genome}.chr.unique.flagstat_bam",
+        filt=out_dir + "workup/logs/{sample}.{genome}.filt.flagstat_bam"
+    threads: 7
+    message: "flagstat_bam {input}: {threads} threads"
+    shell:
+        '''
+        samtools flagstat -@ {threads} {input.bam} > {output.bam} 2> {log.bam}
+        samtools flagstat -@ {threads} {input.chr} > {output.chr} 2> {log.chr}
+        samtools flagstat -@ {threads} {input.unq} > {output.unq} 2> {log.unq}
+        samtools flagstat -@ {threads} {input.filt} > {output.filt} 2> {log.filt}
+        '''
+
+rule mapq_filter:
+    input:
+        out_dir + "workup/alignments/{sample}.{genome}.chr.unique.bam"
+    output:
+        out_dir + f"workup/alignments/{{sample}}.{{genome}}.chr.unique.mapq{mapq}.bam"
+    conda:
+        "envs/bowtie2.yaml"
+    log: 
+        out_dir + "workup/logs/{sample}.{genome}.mapq_filt.log"
+    params:
+        mapq_filt = mapq
+    shell:
+        '''
+        samtools view -bq {params.mapq_filt} {input} > {output} 2> {log}
+        '''
+
+
 rule make_clusters:
     input:
-        expand(out_dir + "workup/alignments/{sample}.{genome}.chr.unique.bam", 
+        expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.chr.unique.mapq{mapq}.bam", 
                sample=ALL_SAMPLES, genome=assembly)
     output:
         out_dir + "workup/clusters/{sample}.clusters"

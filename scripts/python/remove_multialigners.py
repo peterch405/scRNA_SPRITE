@@ -95,6 +95,8 @@ def write_unique(unique_sets_of_reads):
 
         print(out_reads, 'written for', k, 'out of a total of', total)
 
+    output_file.close()
+
 
 if __name__ == "__main__":
     main()
