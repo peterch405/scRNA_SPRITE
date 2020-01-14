@@ -11,6 +11,7 @@ output_dir: "/mnt/data/scRNA/20191205_scrna_mus_hs_2/"
 ########################################################################################
 #Currently "mm10" and "hg38" or "mm10&hg38" available
 assembly: "mm10&hg38"
+repeat_assembly: "mm10_rep&hg38_rep"
 mapq_filter: 20
 #Number of barcodes used
 num_tags: "4"
@@ -22,8 +23,26 @@ trim3: 0
 #Aligner
 aligner: "hisat2"
 #Additional aligner settings
-hisat2_settings: "--transcriptome-mapping-only" #"--sp 1000,1000"
+hisat2_settings: "--no-discordant --no-mixed" #"--sp 1000,1000" 
 bowtie2_settings: ""
+STAR_RNA_params: "--runMode alignReads \
+--outFilterMultimapNmax 50 \
+--outFilterScoreMinOverLread 0.30 \
+--outFilterMatchNminOverLread 0.30 \
+--outFilterIntronMotifs None \
+--alignIntronMax 50000 \
+--alignMatesGapMax 1000 \
+--genomeLoad NoSharedMemory \
+--outReadsUnmapped Fastx \
+--alignIntronMin 80 \
+--alignSJDBoverhangMin 5 \
+--outSAMtype BAM SortedByCoordinate \
+--limitBAMsortRAM 250000000 \
+--outSAMattributes All \
+--readFilesCommand zcat \
+--sjdbOverhang 100 \
+--twopassMode Basic"
+
 ########################################################################################   
 #Indexes
 ########################################################################################
@@ -31,9 +50,13 @@ bowtie2_settings: ""
 hisat2_index:
     mm10: "/mnt/data/genomes/GRCm38.p6/GRCm38.p6"
     hg38: "/mnt/data/genomes/GRCh38/GRCh38"
+    mm10_rep: "/mnt/data/genomes/GRCm38.p6/repeats/mm_repetitive_sequences_20200109"
+    hg38_rep: "/mnt/data/genomes/GRCh38/repeats/Hs_repetitive_sequences_20200109"
 hisat2_splice_sites:
     mm10: "/mnt/data/genomes/GRCm38.p6/Mus_musculus.GRCm38.95.ss"
     hg38: "/mnt/data/genomes/GRCh38/Homo_sapiens.GRCh38.97.ss"
+    mm10_rep: "/mnt/data/genomes/GRCm38.p6/repeats/mm_repetitive_sequences_20200109.ss"
+    hg38_rep: "/mnt/data/genomes/GRCh38/repeats/Hs_repetitive_sequences_20200109.ss"
 #Annotation GTF file used for featureCounts
 anno_gtf:
     mm10: "/mnt/data/genomes/GRCm38.p6/GRCm38.p6.annotation.gtf.gz"
@@ -41,11 +64,16 @@ anno_gtf:
 bowtie2_index:
     mm10: "/mnt/data/genomes/GRCm38.p6/GRCm38.p6"
     hg38: "/mnt/data/genomes/GRCh38/GRCh38"
+    mm10_rep: "/mnt/data/genomes/GRCm38.p6/repeats/mm_repetitive_sequences_20200109"
+    hg38_rep: "/mnt/data/genomes/GRCh38/repeats/Hs_repetitive_sequences_20200109"
     halo: "/mnt/data/scRNA/pcag-halo-tev-ezh2-v5"
 #Location of STAR aligner indexes
 star_index:
     mm10: "/mnt/data/genomes/GRCm38.p6/star"
     hg38: "/mnt/data/genomes//GRCh38/star"
-filters:
-    mm10: "/mnt/data/genomes/GRCm38.p6/GRCm38.95_protein_coding_exon.bed"
-    hg38: "/mnt/data/genomes/GRCh38/GRCh38.97_protein_coding_exon.bed"
+#Can add multiple files?
+include_filter:
+    mm10: "/mnt/data/genomes/GRCm38.p6/GRCm38.95_protein_coding.bed"
+    hg38: "/mnt/data/genomes/GRCh38/GRCh38.97_protein_coding.bed"
+exclude_filter:
+    mm10: "~/scRNA_SPRITE/spen_mask.bed"

@@ -7,6 +7,7 @@ Aim: A Snakemake workflow to process scRNA-seq with the SPRITE barcoding scheme
 import os 
 import sys
 import datetime
+from collections import defaultdict
 
 #Location of scripts
 barcode_id_jar = "scripts/java/BarcodeIdentification_v1.2.0.jar"
@@ -15,7 +16,10 @@ add_chr = "scripts/python/ensembl2ucsc.py"
 get_clusters = "scripts/python/get_clusters.py"
 split_fq = "scripts/python/get_full_barcodes.py"
 remove_multi = "scripts/python/remove_multialigners.py"
+
+###################################################################################
 #Load config.yaml file
+###################################################################################
 
 try:
     config_path = config["config_path"]
@@ -57,20 +61,38 @@ except:
     num_tags = "5"
     print('Config "num_tags" not specified, using:', num_tags)
 
+
+#Bedtools region filtering (e.g. repeat masking)
 try:
-    filters = config['filters']
+    in_filter = config['include_filter']
 except:
-    print('Config "filters" not specified in config.yaml')
-    sys.exit()
+    in_filter = ''
+    print('Include filtering will be skipped')
+
+try:
+    ex_filter = config['exclude_filter']
+except:
+    ex_filter = ''
+    print('Exclude filtering will be skipped')
+
+
 
 #Make pipeline compatible for multiple assemblies
 try:
     assembly = config['assembly'].split('&')
-    assert all(i in ['mm10', 'hg38', 'halo'] for i in assembly), 'Only "mm10" or "hg38" currently supported'
-    print('Using', ' '.join(assembly))
+    assert all(i in ['mm10', 'hg38', 'mm10_rep', 'hg38_rep', 'halo'] for i in assembly), 'Only x options currently supported'
+    print('Using assembly:', ' '.join(assembly))
 except:
     print('Config "assembly" not specified, defaulting to "mm10"')
     assembly = 'mm10'
+
+try:
+    rep_assembly = config['repeat_assembly'].split('&')
+    assert all(i in ['mm10_rep', 'hg38_rep'] for i in rep_assembly), 'Only x options currently supported'
+    print('Using repeat assembly:', ' '.join(rep_assembly))
+except:
+    print('Config "repeat_assembly" not specified, won\'t align to repeats')
+    rep_assembly = ''
 
 
 
@@ -138,6 +160,13 @@ try:
 except:
     b2_add_settings = ''
 
+#STAR flags
+try:
+    STAR_RNA_params = config["STAR_RNA_params"]
+except:
+    STAR_RNA_params = ''
+
+
 #Mapq filter
 if config['aligner'] == 'star':
     mapq = 255
@@ -146,6 +175,11 @@ else:
         mapq = config["mapq_filter"]
     except:
         mapq = 20
+
+
+#####################################################################################
+#Output files, setting up rule all
+#####################################################################################
 
 #get all samples from fastq Directory using the fastq2json.py scripts, then just
 #load the json file with the samples
@@ -183,31 +217,29 @@ FASTQC = expand([out_dir + "workup/trimmed/{sample}_R1_bfull_trim_fastqc.html",
 
 #Hisat2 alignment
 Ht2_RNA_ALIGN_SE = expand(out_dir + "workup/alignments/{sample}.{genome}.SE.h2.bam", 
-                        sample=ALL_SAMPLES, genome=assembly)
+                        sample=ALL_SAMPLES, genome=assembly+rep_assembly)
 Ht2_RNA_ALIGN_PE = expand(out_dir + "workup/alignments/{sample}.{genome}.PE.h2.bam", 
-                           sample=ALL_SAMPLES, genome=assembly)
+                           sample=ALL_SAMPLES, genome=assembly+rep_assembly)
 
 Ht2_ANNO_RNA_SE = expand(out_dir + "workup/alignments/{sample}.{genome}.SE.h2.bam.featureCounts.bam",
-                  sample=ALL_SAMPLES, genome=assembly)
+                  sample=ALL_SAMPLES, genome=assembly+rep_assembly)
 Ht2_ANNO_RNA_PE = expand(out_dir + "workup/alignments/{sample}.{genome}.PE.h2.bam.featureCounts.bam",
-                  sample=ALL_SAMPLES, genome=assembly)
+                  sample=ALL_SAMPLES, genome=assembly+rep_assembly)
+
 ADD_CHR = expand(out_dir + "workup/alignments/{sample}.{genome}.chr.bam", 
                  sample=ALL_SAMPLES, genome=assembly)
 
 UNIQUE =  expand(out_dir + "workup/alignments/{sample}.{genome}.chr.unique.bam", 
                  sample=ALL_SAMPLES, genome=assembly)
 
-FILTERED =  expand(out_dir + "workup/alignments/{sample}.{genome}.filt.bam", 
-                   sample=ALL_SAMPLES, genome=assembly)
-
 CLUSTERS_PLOT = [out_dir + "workup/clusters/cluster_sizes.pdf", 
                  out_dir + "workup/clusters/cluster_sizes.png"]
 
-BOWTIE2_ALIGN = expand(out_dir + "workup/alignments/{sample}.DNA.b2.bam", 
-                       sample=ALL_SAMPLES)
+BOWTIE2_ALIGN = expand(out_dir + "workup/alignments/{sample}.{genome}.DNA.b2.bam", 
+                       sample=ALL_SAMPLES, genome=assembly+rep_assembly)
 
 STAR_RNA = expand(out_dir + "workup/alignments/{sample}.{genome}.bam", 
-                   sample=ALL_SAMPLES, genome=assembly)
+                   sample=ALL_SAMPLES, genome=assembly+rep_assembly)
 
 FLAGSTAT = expand([out_dir + "workup/alignments/{sample}.{genome}.chr.bam.flagstat",
                    out_dir + "workup/alignments/{sample}.{genome}.bam.flagstat",
@@ -220,57 +252,82 @@ MAPQ = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.chr.unique.map
 CLUSTERS = expand(out_dir + "workup/clusters/{sample}.clusters", sample=ALL_SAMPLES)
 
 
+def subset_dict(orig_dict, keys_to_keep):
+    '''Subset dictionary by keys to keep
+    '''
+    new_dict = defaultdict()
+    for k, v in orig_dict.items(): 
+        if k in keys_to_keep:
+            new_dict[k] = v
+    return new_dict
+
+
+
+#Include and exclude reads filter
+if len(ex_filter) > 0 and len(in_filter) > 0:
+    first_filt = 'in_filt'
+    final_filt = 'in_ex_filt'
+    in_filt_assembly = [i for i in assembly if i in list(in_filter.keys())]
+    ex_filt_assembly = [i for i in assembly if i in list(ex_filter.keys())]
+    
+    IN_FILTERED = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{first_filt}.bam", 
+                  sample=ALL_SAMPLES, genome=in_filt_assembly)
+    EX_FILTERED = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{final_filt}.bam", 
+                  sample=ALL_SAMPLES, genome=ex_filt_assembly)
+    efa = subset_dict(ex_filter, ex_filt_assembly)
+    ifa = subset_dict(in_filter, in_filt_assembly)
+#Exclude filter only
+elif len(in_filter) > 0 and len(ex_filter) == 0:
+    first_filt = 'in_filt'
+    in_filt_assembly = [i for i in assembly if i in list(in_filter.keys())]
+
+    IN_FILTERED = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{first_filt}.bam", 
+                  sample=ALL_SAMPLES, genome=in_filt_assembly)
+    EX_FILTERED = []
+    ifa = subset_dict(in_filter, in_filt_assembly)
+#Exclude filter only
+elif len(ex_filter) > 0 and len(in_filter) == 0:
+    final_filt = 'ex_filt'
+    ex_filt_assembly = [i for i in assembly if i in list(ex_filter.keys())]
+
+    EX_FILTERED = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{final_filt}.bam", 
+                  sample=ALL_SAMPLES, genome=ex_filt_assembly)
+    IN_FILTERED = []
+    efa = subset_dict(ex_filter, ex_filt_assembly)
+
+else:
+    print('Filtering rules not working correctly')
+    sys.exit()
+
+
+
 if config['aligner'] == 'hisat2':
-    if align_mode == "SE":
-        rule all:
-            input: CONFIG + ALL_FASTQ + TRIM + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
-                CUTADAPT + Ht2_RNA_ALIGN_SE + #Ht2_ANNO_RNA_SE + 
-                ADD_CHR + UNIQUE + FILTERED + CLUSTERS + MULTI_QC + CLUSTERS_PLOT + FLAGSTAT + 
-                MAPQ
-    elif align_mode == "PE":
-        rule all:
-            input: CONFIG + ALL_FASTQ + TRIM + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
-                CUTADAPT + FASTQC + #Ht2_RNA_ALIGN_PE + Ht2_ANNO_RNA_PE +
-                ADD_CHR + UNIQUE + FILTERED+ CLUSTERS + MULTI_QC + CLUSTERS_PLOT + FLAGSTAT +
-                MAPQ
-elif config['aligner'] == 'bowtie2':
-        rule all:
-            input: CONFIG + ALL_FASTQ + TRIM + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
-                CUTADAPT + ADD_CHR + UNIQUE + FILTERED + CLUSTERS + MULTI_QC + CLUSTERS_PLOT + 
-                BOWTIE2_ALIGN + FLAGSTAT + MAPQ
+    if align_mode == 'SE':
+        VARIABLE = Ht2_RNA_ALIGN_SE #+ Ht2_ANNO_RNA_SE
+    elif align_mode == 'PE':
+        VARIABLE = Ht2_RNA_ALIGN_PE #+ Ht2_ANNO_RNA_PE
+elif config['aligner'] == 'bowtie2': 
+    VARIABLE = BOWTIE2_ALIGN 
 elif config['aligner'] == 'star':
-        rule all:
-            input: CONFIG + ALL_FASTQ + TRIM + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
-                CUTADAPT + FASTQC + STAR_RNA #+
-                #ADD_CHR + CLUSTERS + MULTI_QC + CLUSTERS_PLOT + FLAGSTAT
+    VARIABLE = STAR_RNA
+
+########################################################################################################################
+#Main rule
+########################################################################################################################
+
+rule all:
+    input: CONFIG + ALL_FASTQ + TRIM + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
+           CUTADAPT + ADD_CHR + UNIQUE + IN_FILTERED + EX_FILTERED + CLUSTERS + 
+           MULTI_QC + CLUSTERS_PLOT + MAPQ + VARIABLE #FLAGSTAT
 
 #Send and email if an error occurs during execution
 onerror:
     shell('mail -s "an error occurred" ' + email + ' < {log}')
 
 
-
-RNA_star_params = "--runMode alignReads \
---outFilterMultimapNmax 50 \
---outFilterScoreMinOverLread 0.30 \
---outFilterMatchNminOverLread 0.30 \
---outFilterIntronMotifs None \
---alignIntronMax 50000 \
---alignMatesGapMax 1000 \
---genomeLoad NoSharedMemory \
---outReadsUnmapped Fastx \
---alignIntronMin 80 \
---alignSJDBoverhangMin 5 \
---outSAMtype BAM SortedByCoordinate \
---limitBAMsortRAM 250000000 \
---outSAMattributes All \
---readFilesCommand zcat \
---sjdbOverhang 100 \
---twopassMode Basic"
-
-####################################################################################################
+########################################################################################################################
 #Trimming and barcode identification
-####################################################################################################
+########################################################################################################################
 
 rule adaptor_trimming_pe:
     '''
@@ -377,7 +434,6 @@ rule full_barcode:
 rule cutadapt_pe:
     '''
     Trim barcode sequences for paired end alignment
-    --minimum-length 20 (don't filter on read length as single end alignment still valuable)
     -n 3
     Read 1:
     -a 3' adaptor
@@ -420,9 +476,9 @@ rule fastqc:
         "fastqc {input} &> {log}"
 
 
-############################################################################################
+########################################################################################################################
 #RNA alignment
-############################################################################################
+########################################################################################################################
 
 
 
@@ -455,7 +511,6 @@ rule hisat2_align:
         -p {threads} \
         -t \
         --phred33 \
-        --summary-file \
         {h2_add_settings} \
         --trim5 {trim5_len} \
         --trim3 {trim3_len} \
@@ -492,10 +547,10 @@ rule hisat2_align_pe:
     threads: 10
     params:
         ss = lambda wildcards: hisat2_ss[wildcards.genome],
-        index = lambda wildcards: hisat2_index[wildcards.genome],
+        index = lambda wildcards: hisat2_index[wildcards.genome]
         # mq_filter = mapq
-    # conda:
-    #     "envs/hisat2.yaml"
+    conda:
+        "envs/hisat2.yaml"
     log:
         out_dir + "workup/logs/{sample}.{genome}.PE.hisat2.log"
     shell:
@@ -504,10 +559,7 @@ rule hisat2_align_pe:
         --dta \
         -p {threads} \
         -t \
-        --no-discordant \
-        --no-mixed \
         --phred33 \
-        --summary-file \
         {h2_add_settings} \
         --trim5 {trim5_len} \
         --trim3 {trim3_len} \
@@ -516,6 +568,7 @@ rule hisat2_align_pe:
         -1 {input.fq_1} -2 {input.fq_2} | \
         samtools view -b -F 4 -F 256 - > {output}) &> {log}
         '''
+# --known-splicesite-infile {params.ss}
 # q {params.mq_filter}
 # --sp 1000,1000 \
 # --no-mixed \
@@ -550,7 +603,7 @@ rule bowtie2_align:
         -x {params.bowtie2_idx} \
         -U {input.fq} | \
         samtools view -b -F 4 -F 256 - > {output}) &> {log}"
-# q {params.mq_filter}
+
 
 
 
@@ -594,7 +647,9 @@ rule star_align_rna:
    # samtools view -bq 255 {out_dir}workup/alignments/{wildcards.sample}.{wildcards.genome}.Aligned.sortedByCoord.out.bam > \
         #     {out_dir}workup/alignments/{wildcards.sample}.{wildcards.genome}.mapq20.bam
 
-
+########################################################################################################################
+#Read annotation
+########################################################################################################################
 
 rule annotate_rna:
     '''
@@ -636,7 +691,12 @@ rule annotate_rna:
         {input}
         '''
 
-rule filter_reads:
+
+########################################################################################################################
+#Filtering and cluster making
+########################################################################################################################
+
+rule filter_include_reads:
     '''
     Filter, keeping only reads within protein coding genes. (Alternatively, Repeatmask filter)
     -v 	Only report those entries in A that have no overlap in B. Restricted by -f and -r.
@@ -644,22 +704,125 @@ rule filter_reads:
     input:
         out_dir + f"workup/alignments/{{sample}}.{{genome}}.{align_mode}.h2.bam"
     output:
-        out_dir + "workup/alignments/{sample}.{genome}.filt.bam"
+        out_dir + f"workup/alignments/{{sample}}.{{genome}}.{first_filt}.bam"
+    wildcard_constraints:
+        genome='|'.join(in_filt_assembly)
     params:
-        mask = lambda wildcards: filters[wildcards.genome]
+        keep_regions = lambda wildcards: ifa[wildcards.genome]
     conda:
         "envs/bedtools.yaml"
     shell:
         '''
-        bedtools intersect -a {input} -b {params.mask} > {output}
+        bedtools intersect -a {input} -b {params.keep_regions} > {output}
         '''
 
 
+def filter_exclude_reads_input(wildcards):
+    '''Input to filter_exclude_reads
+    '''
+    
+    if wildcards.genome in list(in_filter.keys()):
+        filter_in = [wildcards.genome]
+    else:
+        fitler_in = []
+    if wildcards.genome in list(ex_filter.keys()):
+        filter_ex = [wildcards.genome]
+    else:
+        filter_ex = []
+ 
+    both_filt = set(filter_in) & set(filter_ex) #intersection
+    # in_only = set(filter_in) - set(filter_ex) #difference
+    ex_only = set(filter_ex) - set(filter_in) #difference
+    # no_filt = set(assembly) - (both_filt | in_only | ex_only) #no filter
+    
+    if len(both_filt) > 0:
+        BOTH = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{first_filt}.bam",
+                      sample=ALL_SAMPLES, genome=both_filt)
+    else:
+        BOTH = []
+    if len(ex_only) > 0:
+        EX = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{align_mode}.h2.bam",
+                      sample=ALL_SAMPLES, genome=ex_only)
+    else:
+        EX = []
+
+    return BOTH + EX
+
+
+rule filter_exclude_reads:
+    '''
+    Filter, keeping only reads within protein coding genes. (Alternatively, Repeatmask filter)
+    -v 	Only report those entries in A that have no overlap in B. Restricted by -f and -r.
+    '''
+    input:
+        # rules.filter_include_reads.output if len(IN_FILTERED) > 0 else 
+        # out_dir + f"workup/alignments/{{sample}}.{{genome}}.{align_mode}.h2.bam"
+        filter_exclude_reads_input
+    output:
+        out_dir + f"workup/alignments/{{sample}}.{{genome}}.{final_filt}.bam"
+    wildcard_constraints:
+        genome='|'.join(ex_filt_assembly)
+    params:
+        remove_regions = lambda wildcards: efa[wildcards.genome]
+    conda:
+        "envs/bedtools.yaml"
+    shell:
+        '''
+        bedtools intersect -v -a {input} -b {params.remove_regions} > {output}
+        '''
+
+
+
+def add_chr_input(wildcards):
+    '''Input to add_chr
+    If no filtering, use output from aligner
+    '''
+    
+    if wildcards.genome in list(in_filter.keys()):
+        filter_in = [wildcards.genome]
+    else:
+        filter_in = []
+    if wildcards.genome in list(ex_filter.keys()):
+        filter_ex = [wildcards.genome]
+    else:
+        filter_ex = []
+ 
+    both_filt = set(filter_in) & set(filter_ex) #intersection
+    in_only = set(filter_in) - set(filter_ex) #difference
+    ex_only = set(filter_ex) - set(filter_in) #difference
+    no_filt = set([wildcards.genome]) - (both_filt | in_only | ex_only) #no filter
+
+    if len(both_filt) > 0:
+        BOTH = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{final_filt}.bam",
+                      sample=ALL_SAMPLES, genome=both_filt)
+    else:
+        BOTH = []
+    if len(ex_only) > 0:
+        EX = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{final_filt}.bam",
+                      sample=ALL_SAMPLES, genome=ex_only)
+    else:
+        EX = []
+    if len(in_only) > 0:
+        IN =  expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{first_filt}.bam",
+                    sample=ALL_SAMPLES, genome=in_only)
+    else:
+        IN = []
+    if len(no_filt) > 0:
+        NO = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{align_mode}.h2.bam",
+                    sample=ALL_SAMPLES, genome=no_filt)
+    else:
+        NO = []
+
+    return BOTH + EX + IN + NO
+    
+
 rule add_chr:
     input:
-        out_dir + "workup/alignments/{sample}.{genome}.filt.bam"
+        add_chr_input
     output:
         out_dir + "workup/alignments/{sample}.{genome}.chr.bam"
+    wildcard_constraints:
+        genome='|'.join(assembly)
     log:
         out_dir + "workup/logs/{sample}.{genome}.chr.log"
     conda:
@@ -672,48 +835,50 @@ rule add_chr:
 
 rule remove_multi_assembly_aligners:
     input:
-        expand(out_dir + "workup/alignments/{sample}.{genome}.chr.bam", 
-               sample=ALL_SAMPLES, genome=assembly)
+        main = expand(out_dir + "workup/alignments/{sample}.{genome}.chr.bam", 
+               sample=ALL_SAMPLES, genome=assembly),
+        rep = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{align_mode}.h2.bam", 
+               sample=ALL_SAMPLES, genome=rep_assembly) if len(rep_assembly) > 0 else "" 
     output:
         out_dir + "workup/alignments/{sample}.{genome}.chr.unique.bam"
     conda:
         "envs/python_dep.yaml"
     shell:
         '''
-        python {remove_multi} -i {input} &> {out_dir}workup/logs/multi_assembly_align.log
+        python {remove_multi} -i {input.main} {input.rep} &> {out_dir}workup/logs/multi_assembly_align.log
         '''
 
 
 
-rule flagstat_bam:
-    '''
-    Check number of reads mapped with samtools flagstat
-    This is so the alignment stats will be included in multiqc
-    '''
-    input: 
-        bam=out_dir + f"workup/alignments/{{sample}}.{{genome}}.{align_mode}.h2.bam",
-        chr=out_dir + "workup/alignments/{sample}.{genome}.chr.bam",
-        unq=out_dir + "workup/alignments/{sample}.{genome}.chr.unique.bam",
-        filt=out_dir + "workup/alignments/{sample}.{genome}.filt.bam"
-    output: 
-        bam=out_dir + "workup/alignments/{sample}.{genome}.bam.flagstat",
-        chr=out_dir + "workup/alignments/{sample}.{genome}.chr.bam.flagstat",
-        unq=out_dir + "workup/alignments/{sample}.{genome}.chr.unique.bam.flagstat",
-        filt=out_dir + "workup/alignments/{sample}.{genome}.filt.bam.flagstat"
-    log:
-        bam=out_dir + "workup/logs/{sample}.{genome}.flagstat_bam",    
-        chr=out_dir + "workup/logs/{sample}.{genome}.chr.flagstat_bam",
-        unq=out_dir + "workup/logs/{sample}.{genome}.chr.unique.flagstat_bam",
-        filt=out_dir + "workup/logs/{sample}.{genome}.filt.flagstat_bam"
-    threads: 7
-    message: "flagstat_bam {input}: {threads} threads"
-    shell:
-        '''
-        samtools flagstat -@ {threads} {input.bam} > {output.bam} 2> {log.bam}
-        samtools flagstat -@ {threads} {input.chr} > {output.chr} 2> {log.chr}
-        samtools flagstat -@ {threads} {input.unq} > {output.unq} 2> {log.unq}
-        samtools flagstat -@ {threads} {input.filt} > {output.filt} 2> {log.filt}
-        '''
+# rule flagstat_bam:
+#     '''
+#     Check number of reads mapped with samtools flagstat
+#     This is so the alignment stats will be included in multiqc
+#     '''
+#     input: 
+#         bam=out_dir + f"workup/alignments/{{sample}}.{{genome}}.{align_mode}.h2.bam",
+#         chr=out_dir + "workup/alignments/{sample}.{genome}.chr.bam",
+#         unq=out_dir + "workup/alignments/{sample}.{genome}.chr.unique.bam",
+#         filt=out_dir + "workup/alignments/{sample}.{genome}.filt.bam"
+#     output: 
+#         bam=out_dir + "workup/alignments/{sample}.{genome}.bam.flagstat",
+#         chr=out_dir + "workup/alignments/{sample}.{genome}.chr.bam.flagstat",
+#         unq=out_dir + "workup/alignments/{sample}.{genome}.chr.unique.bam.flagstat",
+#         filt=out_dir + "workup/alignments/{sample}.{genome}.filt.bam.flagstat"
+#     log:
+#         bam=out_dir + "workup/logs/{sample}.{genome}.flagstat_bam",    
+#         chr=out_dir + "workup/logs/{sample}.{genome}.chr.flagstat_bam",
+#         unq=out_dir + "workup/logs/{sample}.{genome}.chr.unique.flagstat_bam",
+#         filt=out_dir + "workup/logs/{sample}.{genome}.filt.flagstat_bam"
+#     threads: 7
+#     message: "flagstat_bam {input}: {threads} threads"
+#     shell:
+#         '''
+#         samtools flagstat -@ {threads} {input.bam} > {output.bam} 2> {log.bam}
+#         samtools flagstat -@ {threads} {input.chr} > {output.chr} 2> {log.chr}
+#         samtools flagstat -@ {threads} {input.unq} > {output.unq} 2> {log.unq}
+#         samtools flagstat -@ {threads} {input.filt} > {output.filt} 2> {log.filt}
+#         '''
 
 rule mapq_filter:
     input:
