@@ -160,7 +160,7 @@ def get_clusters(bamfile, num_tags):
                     match = pattern.search(name)
                     barcode = list(match.groups())
                     strand = '+' if not read.is_reverse else '-'
-                   
+                    umi = name.split('_')[-1]
 
                     if read.has_tag('XT'):
                         gene_anno = read.get_tag('XT')
@@ -170,7 +170,7 @@ def get_clusters(bamfile, num_tags):
                         gene_anno = ''
                     
                     
-                    anno = ';'.join(filter(None, [assembly, gene_anno, strand]))
+                    anno = ';'.join(filter(None, [assembly, gene_anno, strand, umi]))
 
                     position = Position('DNA', anno, read.reference_name,
                                         read.reference_start, read.reference_end)

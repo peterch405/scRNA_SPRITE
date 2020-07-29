@@ -66,16 +66,18 @@ except:
 try:
     in_filter = config['include_filter']
 except:
-    in_filter = ''
+    in_filter = dict()
     print('Include filtering will be skipped')
 
 try:
     ex_filter = config['exclude_filter']
 except:
-    ex_filter = ''
+    ex_filter = dict()
     print('Exclude filtering will be skipped')
 
-
+################################################################################
+# Select aligner index
+################################################################################
 
 #Make pipeline compatible for multiple assemblies
 try:
@@ -130,22 +132,7 @@ except:
     print('Align mode not specified')
     sys.exit()
 
-try:
-    samples = config['samples']
-    print('Using samples file:', samples)
-except:
-    samples = './samples.json'
-    print('Defaulting to working directory for samples json file')
 
-try:
-    trim5_len = config['trim5']
-    trim3_len = config['trim3']
-except:
-    trim5_len = 0
-    trim3_len = 0
-
-print("Trimming 5' end:", trim5_len)
-print("Trimming 3' end:", trim3_len)
 
 
 #Additional hisat2 flags
@@ -177,14 +164,40 @@ else:
         mapq = 20
 
 
+try:
+    trim5_len = config['trim5']
+    trim3_len = config['trim3']
+except:
+    trim5_len = 0
+    trim3_len = 0
+
+print("Trimming 5' end:", trim5_len)
+print("Trimming 3' end:", trim3_len)
+
+################################################################################
+# UMI settings
+################################################################################
+
+try:
+    umi = config['umi']
+except:
+    umi = False
+    print('Running without UMI')
+
+if umi == 'True' and trim5_len < 25:
+    print('When UMI is present, 5 prime side should be trimmed at least 25bp')
+    sys.exit()
+
+
 #####################################################################################
 #Output files, setting up rule all
 #####################################################################################
 
 #get all samples from fastq Directory using the fastq2json.py scripts, then just
 #load the json file with the samples
-FILES = json.load(open(samples))
+FILES = json.load(open(config['samples']))
 ALL_SAMPLES = sorted(FILES.keys())
+
 
 ALL_FASTQ = []
 for SAMPLE, file in FILES.items():
@@ -193,7 +206,7 @@ for SAMPLE, file in FILES.items():
 
 CONFIG = [out_dir + "workup/logs/config_" + run_date + "yaml"]
 
-#Shared
+
 TRIM = expand(out_dir + "workup/trimmed/{sample}_{read}.fq.gz", sample = ALL_SAMPLES, 
               read = ["R1_val_1", "R2_val_2"])
 # TRIM_LOG = expand(out_dir + "workup/trimmed/{sample}_{read}.fastq.gz_trimming_report.txt", 
@@ -249,8 +262,31 @@ FLAGSTAT = expand([out_dir + "workup/alignments/{sample}.{genome}.chr.bam.flagst
 
 MAPQ = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.chr.unique.mapq{mapq}.bam",
               sample=ALL_SAMPLES, genome=assembly)
+
 CLUSTERS = expand(out_dir + "workup/clusters/{sample}.clusters", sample=ALL_SAMPLES)
 
+UMI_EXTRACT = expand([out_dir + "workup/trimmed/{sample}_R1_umi_ex.fq.gz",
+                      out_dir + "workup/trimmed/{sample}_R2_umi_ex.fq.gz"],
+                      sample=ALL_SAMPLES)
+UMI_DEDUP = expand(out_dir + f"workup/deduplicated/{{sample}}.{{genome}}.{align_mode}.umi_dedup.bam",
+                   sample=ALL_SAMPLES, genome=assembly)
+
+
+################################################################################
+#Merge
+################################################################################
+
+if align_mode == "PE":
+    MERGE = expand(out_dir + "workup/merged/{sample}_{read}.fastq.gz", 
+                            read = ["R1", "R2"],
+                            sample=ALL_SAMPLES)
+elif align_mode == "SE":
+    MERGE = expand(out_dir + "workup/merged/{sample}.fastq.gz",
+                        sample=ALL_SAMPLES)
+
+################################################################################
+# Filters
+################################################################################
 
 def subset_dict(orig_dict, keys_to_keep):
     '''Subset dictionary by keys to keep
@@ -260,7 +296,6 @@ def subset_dict(orig_dict, keys_to_keep):
         if k in keys_to_keep:
             new_dict[k] = v
     return new_dict
-
 
 
 #Include and exclude reads filter
@@ -296,10 +331,18 @@ elif len(ex_filter) > 0 and len(in_filter) == 0:
     efa = subset_dict(ex_filter, ex_filt_assembly)
 
 else:
-    print('Filtering rules not working correctly')
-    sys.exit()
+    first_filt = ''
+    final_filt = ''
+    IN_FILTERED = []
+    EX_FILTERED = []
+    in_filt_assembly = ''
+    ex_filt_assembly = ''
+    # print('Filtering rules not working correctly')
+    # sys.exit()
 
-
+################################################################################
+# Select which output files
+################################################################################
 
 if config['aligner'] == 'hisat2':
     if align_mode == 'SE':
@@ -311,19 +354,72 @@ elif config['aligner'] == 'bowtie2':
 elif config['aligner'] == 'star':
     VARIABLE = STAR_RNA
 
+if umi == 'True':
+    VARIABLE = VARIABLE + UMI_EXTRACT + UMI_DEDUP
+
 ########################################################################################################################
 #Main rule
 ########################################################################################################################
 
 rule all:
     input: CONFIG + ALL_FASTQ + TRIM + BARCODEID + LE_LOG_ALL + BARCODE_FULL +
-           CUTADAPT + ADD_CHR + UNIQUE + IN_FILTERED + EX_FILTERED + CLUSTERS + 
-           MULTI_QC + CLUSTERS_PLOT + MAPQ + VARIABLE #FLAGSTAT
+           CUTADAPT + VARIABLE + ADD_CHR + UNIQUE + IN_FILTERED + EX_FILTERED + CLUSTERS + 
+           MULTI_QC + CLUSTERS_PLOT + MAPQ #FLAGSTAT
 
 #Send and email if an error occurs during execution
 onerror:
     shell('mail -s "an error occurred" ' + email + ' < {log}')
 
+################################################################################
+#Merge
+################################################################################
+#For files that don't need to be merged, just create a symbolic link
+rule merge_fastqs_se:
+    wildcard_constraints:
+        sample='.+(?<!R[12])'
+    input:
+        lambda wildcards: FILES[wildcards.sample]['R1']
+    output: 
+        out_dir + "workup/merged/{sample}.fastq.gz"
+    shell: 
+        '''
+        count=$(echo '{input}' | awk -F' ' '{{print NF}}')
+        
+        if [[ $count -gt 1 ]]
+        then
+            cat {input} > {output}
+        else
+            ln -s {input} {output}
+        fi
+        '''
+
+rule merge_fastqs_pe:
+    input: 
+        r1 = lambda wildcards: FILES[wildcards.sample]['R1'],
+        r2 = lambda wildcards: FILES[wildcards.sample]['R2']
+    output: 
+        r1 = out_dir + "workup/merged/{sample}_R1.fastq.gz",
+        r2 = out_dir + "workup/merged/{sample}_R2.fastq.gz"
+    shell:
+        ''' 
+        count_1=$(echo '{input.r1}' | awk -F' ' '{{print NF}}')
+        
+        if [[ $count_1 -gt 1 ]]
+        then
+            cat {input.r1} > {output.r1}
+        else
+            ln -s {input.r1} {output.r1}
+        fi
+
+        count_2=$(echo '{input.r2}' | awk -F' ' '{{print NF}}')
+        
+        if [[ $count_2 -gt 1 ]]
+        then
+            cat {input.r2} > {output.r2}
+        else
+            ln -s {input.r2} {output.r2}
+        fi
+        '''
 
 ########################################################################################################################
 #Trimming and barcode identification
@@ -335,25 +431,25 @@ rule adaptor_trimming_pe:
     multiple cores requires pigz to be installed on the system
     '''
     input:
-        [lambda wildcards: FILES[wildcards.sample]['R1'],
-        lambda wildcards: FILES[wildcards.sample]['R2']]
+        [out_dir + "workup/merged/{sample}_R1.fastq.gz", 
+        out_dir + "workup/merged/{sample}_R2.fastq.gz"] 
     output:
         out_dir + "workup/trimmed/{sample}_R1_val_1.fq.gz",
-        out_dir + "workup/trimmed/{sample}_R1.fastq.gz_trimming_report.txt",
-        out_dir + "workup/trimmed/{sample}_R2_val_2.fq.gz",
-        out_dir + "workup/trimmed/{sample}_R2.fastq.gz_trimming_report.txt"
+        out_dir + "workup/trimmed/{sample}_R2_val_2.fq.gz"
     log:
         out_dir + "workup/logs/{sample}.trim_galore.logs"
     conda:
         "envs/trim_galore.yaml"
     shell:
-        "trim_galore \
+        '''
+        trim_galore \
         --paired \
         --gzip \
         --quality 20 \
         --fastqc \
         -o {out_dir}workup/trimmed/ \
-        {input} &> {log}"
+        {input} &> {log}
+        '''
 
 
 rule log_config:
@@ -434,7 +530,10 @@ rule full_barcode:
 rule cutadapt_pe:
     '''
     Trim barcode sequences for paired end alignment
-    -n 3
+    -n 3  Remove up to COUNT adapters from each read
+    -e 0.15 Maximum allowed error rate as value between 0 and 1
+            (no. of errors divided by length of matching region).
+            Default: 0.1 (=10%)
     Read 1:
     -a 3' adaptor
     -g 5' adaptor
@@ -452,14 +551,14 @@ rule cutadapt_pe:
         qc=out_dir + "workup/trimmed/{sample}.trim.qc.txt"
     threads: 10
     params:
-        adapters_r1 = "-a CAAGTCA -a AGTTGTC",
-        adapters_r2 = "-G TGACTTG",
-        others = "-e 0.15 -n 6 --minimum-length 15"
+        adapters = "-a CAAGTCA -a AGTTGTC" if align_mode == "SE" else "-a CAAGTCA -a AGTTGTC -G TGACTTG",
+        others = "-n 2 --minimum-length 15"
     log:
         out_dir + "workup/logs/{sample}.cutadapt.log"
     wrapper:
-        "0.38.0/bio/cutadapt/pe"
+        "0.63.0/bio/cutadapt/pe"
 # r"(?e)(CAAGTCA){e<=1}|(?e)(AGTTGTC){e<=1}"
+
 
 rule fastqc:
     input:
@@ -475,6 +574,56 @@ rule fastqc:
     shell:
         "fastqc {input} &> {log}"
 
+
+########################################################################################################################
+#UMI extraction
+########################################################################################################################
+
+rule umi_extract:
+    input:
+        fastq1=out_dir + "workup/trimmed/{sample}_R1_bfull_trim.fq.gz",
+        fastq2=out_dir + "workup/trimmed/{sample}_R2_bfull_trim.fq.gz"
+    output:
+        fastq1=out_dir + "workup/trimmed/{sample}_R1_umi_ex.fq.gz",
+        fastq2=out_dir + "workup/trimmed/{sample}_R2_umi_ex.fq.gz"
+    log:
+        out_dir + "workup/logs/{sample}.umi_extract.log"
+    conda:
+        "envs/umi_tools.yaml"
+    shell:
+        '''
+        umi_tools extract \
+        -I {input.fastq1} \
+        --bc-pattern=NNNNNNNNNN \
+        --read2-in={input.fastq2} \
+        --stdout={output.fastq1} \
+        --read2-out={output.fastq2} 2> {log}
+        '''
+        
+
+rule umi_deduplicate:
+    input:
+        out_dir + f"workup/alignments/{{sample}}.{{genome}}.{align_mode}.h2.bam"
+    output:
+        out=out_dir + f"workup/deduplicated/{{sample}}.{{genome}}.{align_mode}.umi_dedup.bam",
+        idx=temp(out_dir + f"workup/deduplicated/{{sample}}.{{genome}}.{align_mode}.sorted.bam.bai"),
+        sort=temp(out_dir + f"workup/deduplicated/{{sample}}.{{genome}}.{align_mode}.sorted.bam")
+    log:
+        out_dir + "workup/logs/{sample}.{genome}.umi_dedup.log"
+    params:
+        pair = "--paired" if align_mode == "PE" else "",
+        stats = out_dir + f"workup/deduplicated/{{sample}}.{{genome}}.{align_mode}.dedup.stats"
+    threads:
+        10
+    conda:
+        "envs/umi_tools.yaml"
+    shell:
+        '''
+        samtools sort -T {wildcards.sample} -@ {threads} -o {output.sort} {input}
+        samtools index {output.sort}
+
+        umi_tools dedup -I {output.sort} {params.pair} --output-stats={params.stats} -S {output.out} 2> {log}
+        '''
 
 ########################################################################################################################
 #RNA alignment
@@ -493,16 +642,16 @@ rule hisat2_align:
     #-U FILE Write alignments that are not selected by the various filter options to FILE
     '''
     input:
-        fq=out_dir + "workup/trimmed/{sample}_R1_bfull_trim.fq.gz"
+       out_dir + "workup/trimmed/{sample}_R1_umi_ex.fq.gz" if umi=='True' else 
+       out_dir + "workup/trimmed/{sample}_R1_bfull_trim.fq.gz"
     output:
         mapped=out_dir + "workup/alignments/{sample}.{genome}.SE.h2.bam"
     threads: 10
     params:
         ss = lambda wildcards: hisat2_ss[wildcards.genome],
-        index = lambda wildcards: hisat2_index[wildcards.genome],
-        # mq_filter = mapq
-    # conda:
-    #     "envs/hisat2.yaml"
+        index = lambda wildcards: hisat2_index[wildcards.genome]
+    conda:
+        "envs/hisat2.yaml"
     log:
         out_dir + "workup/logs/{sample}.{genome}.SE.hisat2.log"
     shell:
@@ -516,12 +665,24 @@ rule hisat2_align:
         --trim3 {trim3_len} \
         --known-splicesite-infile {params.ss} \
         -x {params.index} \
-        -U {input.fq} | \
+        -U {input} | \
         samtools view -b -F 4 -F 256 - > {output.mapped}) &> {log}
         '''
 # q {params.mq_filter}
  # params:
         # index = lambda wildcards, output, input: if 'hg38'
+
+def hisat2_align_pe_input(wildcards):
+    '''Input to hisat2_align_pe
+    '''
+    if umi == 'True':
+        fq_1=out_dir + "workup/trimmed/{sample}_R1_umi_ex.fq.gz"
+        fq_2=out_dir + "workup/trimmed/{sample}_R2_umi_ex.fq.gz"
+    else:
+        fq_1=out_dir + "workup/trimmed/{sample}_R1_bfull_trim.fq.gz"
+        fq_2=out_dir + "workup/trimmed/{sample}_R2_bfull_trim.fq.gz"
+    return {'fq_1':fq_1, 'fq_2':fq_2}
+
   
 rule hisat2_align_pe:
     '''
@@ -540,15 +701,13 @@ rule hisat2_align_pe:
             in computation and memory usage.
     '''
     input:
-        fq_1=out_dir + "workup/trimmed/{sample}_R1_bfull_trim.fq.gz",
-        fq_2=out_dir + "workup/trimmed/{sample}_R2_bfull_trim.fq.gz"
+        hisat2_align_pe_input
     output:
         out_dir + "workup/alignments/{sample}.{genome}.PE.h2.bam"
     threads: 10
     params:
         ss = lambda wildcards: hisat2_ss[wildcards.genome],
         index = lambda wildcards: hisat2_index[wildcards.genome]
-        # mq_filter = mapq
     conda:
         "envs/hisat2.yaml"
     log:
@@ -565,7 +724,7 @@ rule hisat2_align_pe:
         --trim3 {trim3_len} \
         --known-splicesite-infile {params.ss} \
         -x {params.index} \
-        -1 {input.fq_1} -2 {input.fq_2} | \
+        -1 {input['fq_1']} -2 {input['fq_2']} | \
         samtools view -b -F 4 -F 256 - > {output}) &> {log}
         '''
 # --known-splicesite-infile {params.ss}
@@ -614,7 +773,8 @@ rule star_align_rna:
     anything that does not align, realign with bowtie2 to our repeats reference
     '''
     input:
-        fq = out_dir + "workup/fastqs/{sample}_R1.barcoded_full.fastq.gz"
+        out_dir + "workup/trimmed/{sample}_R1_umi_ex.fq.gz" if umi=='True' else 
+        out_dir + "workup/trimmed/{sample}_R1_bfull_trim.fq.gz"
     output:
         out_dir + "workup/alignments/{sample}.{genome}.bam",
         out_dir + "workup/alignments/{sample}.{genome}.Aligned.sortedByCoord.out.bam",
@@ -635,7 +795,7 @@ rule star_align_rna:
         STAR {RNA_star_params} \
         --runThreadN {threads} \
         --genomeDir {params.star_idx} \
-        --readFilesIn {input.fq} \
+        --readFilesIn {input} \
         --outFileNamePrefix {out_dir}workup/alignments/{wildcards.sample}.{wildcards.genome}. &> {log}
 
         mv {out_dir}workup/alignments/{wildcards.sample}.{wildcards.genome}.Unmapped.out.mate1 \
@@ -702,6 +862,7 @@ rule filter_include_reads:
     -v 	Only report those entries in A that have no overlap in B. Restricted by -f and -r.
     '''
     input:
+        out_dir + f"workup/deduplicated/{{sample}}.{{genome}}.{align_mode}.umi_dedup.bam" if umi == 'True' else
         out_dir + f"workup/alignments/{{sample}}.{{genome}}.{align_mode}.h2.bam"
     output:
         out_dir + f"workup/alignments/{{sample}}.{{genome}}.{first_filt}.bam"
@@ -737,12 +898,16 @@ def filter_exclude_reads_input(wildcards):
     
     if len(both_filt) > 0:
         BOTH = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{first_filt}.bam",
-                      sample=ALL_SAMPLES, genome=both_filt)
+                      sample=wildcards.sample, genome=both_filt)
     else:
         BOTH = []
     if len(ex_only) > 0:
-        EX = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{align_mode}.h2.bam",
-                      sample=ALL_SAMPLES, genome=ex_only)
+        if umi == 'True':
+            EX = expand(out_dir + f"workup/deduplicated/{{sample}}.{{genome}}.{align_mode}.umi_dedup.bam",
+                          sample=wildcards.sample, genome=ex_only)
+        else:
+            EX = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{align_mode}.h2.bam",
+                          sample=wildcards.sample, genome=ex_only)
     else:
         EX = []
 
@@ -794,25 +959,29 @@ def add_chr_input(wildcards):
 
     if len(both_filt) > 0:
         BOTH = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{final_filt}.bam",
-                      sample=ALL_SAMPLES, genome=both_filt)
+                      sample=wildcards.sample, genome=both_filt)
     else:
         BOTH = []
     if len(ex_only) > 0:
         EX = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{final_filt}.bam",
-                      sample=ALL_SAMPLES, genome=ex_only)
+                      sample=wildcards.sample, genome=ex_only)
     else:
         EX = []
     if len(in_only) > 0:
         IN =  expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{first_filt}.bam",
-                    sample=ALL_SAMPLES, genome=in_only)
+                    sample=wildcards.sample, genome=in_only)
     else:
         IN = []
     if len(no_filt) > 0:
-        NO = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{align_mode}.h2.bam",
-                    sample=ALL_SAMPLES, genome=no_filt)
+        if umi == 'True':
+            NO = expand(out_dir + f"workup/deduplicated/{{sample}}.{{genome}}.{align_mode}.umi_dedup.bam",
+                        sample=wildcards.sample, genome=no_filt)
+        else:
+            NO = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{align_mode}.h2.bam",
+                        sample=wildcards.sample, genome=no_filt)
     else:
         NO = []
-
+    
     return BOTH + EX + IN + NO
     
 
@@ -833,19 +1002,43 @@ rule add_chr:
         '''
 
 
+def remove_multi_assembly_aligners_input(wildcards):
+    '''Input to rule remove_multi_assembly_aligners
+    '''
+    if umi == 'True':
+        if len(rep_assembly) > 0:
+            rep = expand(out_dir + f"workup/deduplicated/{{sample}}.{{genome}}.{align_mode}.umi_dedup.bam", 
+                         sample=ALL_SAMPLES, genome=rep_assembly)
+        else:
+            rep = ""
+
+    else:
+        if len(rep_assembly) > 0:
+            rep = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{align_mode}.h2.bam", 
+                         sample=ALL_SAMPLES, genome=rep_assembly)
+        else:
+            rep = ""
+
+    main = expand(out_dir + "workup/alignments/{sample}.{genome}.chr.bam", 
+               sample=ALL_SAMPLES, genome=assembly)
+
+    return rep + main
+
+
 rule remove_multi_assembly_aligners:
     input:
-        main = expand(out_dir + "workup/alignments/{sample}.{genome}.chr.bam", 
-               sample=ALL_SAMPLES, genome=assembly),
-        rep = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{align_mode}.h2.bam", 
-               sample=ALL_SAMPLES, genome=rep_assembly) if len(rep_assembly) > 0 else "" 
+        # main = expand(out_dir + "workup/alignments/{sample}.{genome}.chr.bam", 
+        #        sample=ALL_SAMPLES, genome=assembly),
+        # rep = expand(out_dir + f"workup/alignments/{{sample}}.{{genome}}.{align_mode}.h2.bam", 
+        #        sample=ALL_SAMPLES, genome=rep_assembly) if len(rep_assembly) > 0 else "" 
+        remove_multi_assembly_aligners_input
     output:
         out_dir + "workup/alignments/{sample}.{genome}.chr.unique.bam"
     conda:
         "envs/python_dep.yaml"
     shell:
         '''
-        python {remove_multi} -i {input.main} {input.rep} &> {out_dir}workup/logs/multi_assembly_align.log
+        python {remove_multi} -i {input} &> {out_dir}workup/logs/multi_assembly_align.log
         '''
 
 
